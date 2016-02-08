@@ -22,6 +22,7 @@ package org.apache.cassandra.net;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Collections;
@@ -32,17 +33,30 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.collect.Iterables;
+
 import com.google.common.util.concurrent.Uninterruptibles;
 
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
 import com.codahale.metrics.Snapshot;
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.metrics.Timer;
 import org.apache.cassandra.auth.IInternodeAuthenticator;
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.db.SystemKeyspace;
 
 import org.apache.cassandra.db.monitoring.ApproximateTime;
 
 import org.apache.cassandra.exceptions.ConfigurationException;
+import org.apache.cassandra.net.MessagingService.ServerChannel;
+import org.apache.cassandra.net.async.NettyFactory;
+import org.apache.cassandra.net.async.OutboundConnectionIdentifier;
+import org.apache.cassandra.net.async.OutboundConnectionParams;
+import org.apache.cassandra.net.async.OutboundMessagingPool;
+import org.apache.cassandra.utils.FBUtilities;
+import org.caffinitas.ohc.histo.EstimatedHistogram;
+import org.junit.After;
+import org.junit.Assert;
 
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -105,6 +119,12 @@ public class MessagingServiceTest
         MockBackPressureStrategy.sleep = 0;
         messagingService.destroyConnectionPool(InetAddress.getByName("127.0.0.2"));
         messagingService.destroyConnectionPool(InetAddress.getByName("127.0.0.3"));
+    }
+
+    @After
+    public void replaceAuthenticator()
+    {
+        DatabaseDescriptor.setInternodeAuthenticator(originalAuthenticator);
     }
 
     @Test
@@ -176,7 +196,7 @@ public class MessagingServiceTest
     @Test
     public void testUpdatesBackPressureOnSendWhenEnabledAndWithSupportedCallback() throws UnknownHostException
     {
-        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getByName("127.0.0.2")).join().getBackPressureState();
+        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getBackPressureState(InetAddress.getByName("127.0.0.2"));
 
         DatabaseDescriptor.setBackPressureEnabled(true);
         messagingService.updateBackPressureOnSend(Request.fakeTestRequest(InetAddress.getByName("127.0.0.2"), -1, withoutBackPressure, null)).join();
@@ -194,7 +214,7 @@ public class MessagingServiceTest
     @Test
     public void testUpdatesBackPressureOnReceiveWhenEnabledAndWithSupportedCallback() throws UnknownHostException
     {
-        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getByName("127.0.0.2")).join().getBackPressureState();
+        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getBackPressureState(InetAddress.getByName("127.0.0.2"));
         boolean timeout = false;
 
         DatabaseDescriptor.setBackPressureEnabled(true);
@@ -216,7 +236,7 @@ public class MessagingServiceTest
     @Test
     public void testUpdatesBackPressureOnTimeoutWhenEnabledAndWithSupportedCallback() throws UnknownHostException
     {
-        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getByName("127.0.0.2")).join().getBackPressureState();
+        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getBackPressureState(InetAddress.getByName("127.0.0.2"));
         boolean timeout = true;
 
         DatabaseDescriptor.setBackPressureEnabled(true);
@@ -288,7 +308,7 @@ public class MessagingServiceTest
 
                 if (!Iterables.isEmpty(states))
                     applied = true;
-            
+
                 return null;
             });
         }
@@ -342,4 +362,40 @@ public class MessagingServiceTest
             }
         }
     }
+
+    /**
+     * Make sure that if internode authenticatino fails for an outbound connection that all the code that relies
+     * on getting the connection pool handles the null return
+     * @throws Exception
+     */
+    @Test
+    public void testFailedInternodeAuth() throws Exception
+    {
+        MessagingService ms = MessagingService.instance();
+        DatabaseDescriptor.setInternodeAuthenticator(ALLOW_NOTHING_AUTHENTICATOR);
+        InetAddress address = InetAddress.getByName("127.0.0.250");
+
+        //Should return null
+        assertNull(ms.getConnectionPool(address));
+        assertNull(ms.getConnection(address, new MessageOut(MessagingService.Verb.GOSSIP_DIGEST_ACK)));
+
+        //Should tolerate null
+        ms.convict(address);
+        ms.sendOneWay(new MessageOut(MessagingService.Verb.GOSSIP_DIGEST_ACK), address);
+    }
+
+    @Test
+    public void testOutboundTcpConnectionCleansUp() throws Exception
+    {
+        MessagingService ms = MessagingService.instance();
+        DatabaseDescriptor.setInternodeAuthenticator(ALLOW_NOTHING_AUTHENTICATOR);
+        InetAddress address = InetAddress.getByName("127.0.0.250");
+        OutboundTcpConnectionPool pool = new OutboundTcpConnectionPool(address, new MockBackPressureStrategy(null).newState(address));
+        ms.connectionManagers.put(address, pool);
+        pool.smallMessages.start();
+        pool.smallMessages.enqueue(new MessageOut(MessagingService.Verb.GOSSIP_DIGEST_ACK), 0);
+        pool.smallMessages.join();
+        assertFalse(ms.connectionManagers.containsKey(address));
+    }
+
 }

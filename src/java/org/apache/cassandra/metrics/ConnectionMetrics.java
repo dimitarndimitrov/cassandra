@@ -20,13 +20,13 @@ package org.apache.cassandra.metrics;
 import java.net.InetAddress;
 
 import com.codahale.metrics.Gauge;
+import com.codahale.metrics.Meter;
+import org.apache.cassandra.net.async.OutboundMessagingPool;
 
 import static org.apache.cassandra.metrics.CassandraMetricsRegistry.Metrics;
 
-import org.apache.cassandra.net.OutboundTcpConnectionPool;
-
 /**
- * Metrics for {@link OutboundTcpConnectionPool}.
+ * Metrics for internode connections.
  */
 public class ConnectionMetrics
 {
@@ -64,9 +64,8 @@ public class ConnectionMetrics
      * Create metrics for given connection pool.
      *
      * @param ip IP address to use for metrics label
-     * @param connectionPool Connection pool
      */
-    public ConnectionMetrics(InetAddress ip, final OutboundTcpConnectionPool connectionPool)
+    public ConnectionMetrics(InetAddress ip, final OutboundMessagingPool messagingPool)
     {
         // ipv6 addresses will contain colons, which are invalid in a JMX ObjectName
         address = ip.getHostAddress().replace(':', '.');
@@ -77,63 +76,63 @@ public class ConnectionMetrics
         {
             public Integer getValue()
             {
-                return connectionPool.large().getPendingMessages();
+                return messagingPool.largeMessageChannel.getPendingMessages();
             }
         });
         largeMessageCompletedTasks = Metrics.register(factory.createMetricName("LargeMessageCompletedTasks"), new Gauge<Long>()
         {
             public Long getValue()
             {
-                return connectionPool.large().getCompletedMesssages();
+                return messagingPool.largeMessageChannel.getCompletedMessages();
             }
         });
         largeMessageDroppedTasks = Metrics.register(factory.createMetricName("LargeMessageDroppedTasks"), new Gauge<Long>()
         {
             public Long getValue()
             {
-                return connectionPool.large().getDroppedMessages();
+                return messagingPool.largeMessageChannel.getDroppedMessages();
             }
         });
         smallMessagePendingTasks = Metrics.register(factory.createMetricName("SmallMessagePendingTasks"), new Gauge<Integer>()
         {
             public Integer getValue()
             {
-                return connectionPool.small().getPendingMessages();
+                return messagingPool.smallMessageChannel.getPendingMessages();
             }
         });
         smallMessageCompletedTasks = Metrics.register(factory.createMetricName("SmallMessageCompletedTasks"), new Gauge<Long>()
         {
             public Long getValue()
             {
-                return connectionPool.small().getCompletedMesssages();
+                return messagingPool.smallMessageChannel.getCompletedMessages();
             }
         });
         smallMessageDroppedTasks = Metrics.register(factory.createMetricName("SmallMessageDroppedTasks"), new Gauge<Long>()
         {
             public Long getValue()
             {
-                return connectionPool.small().getDroppedMessages();
+                return messagingPool.smallMessageChannel.getDroppedMessages();
             }
         });
         gossipMessagePendingTasks = Metrics.register(factory.createMetricName("GossipMessagePendingTasks"), new Gauge<Integer>()
         {
             public Integer getValue()
             {
-                return connectionPool.gossip().getPendingMessages();
+                return messagingPool.gossipChannel.getPendingMessages();
             }
         });
         gossipMessageCompletedTasks = Metrics.register(factory.createMetricName("GossipMessageCompletedTasks"), new Gauge<Long>()
         {
             public Long getValue()
             {
-                return connectionPool.gossip().getCompletedMesssages();
+                return messagingPool.gossipChannel.getCompletedMessages();
             }
         });
         gossipMessageDroppedTasks = Metrics.register(factory.createMetricName("GossipMessageDroppedTasks"), new Gauge<Long>()
         {
             public Long getValue()
             {
-                return connectionPool.gossip().getDroppedMessages();
+                return messagingPool.gossipChannel.getDroppedMessages();
             }
         });
         timeouts = Metrics.meter(factory.createMetricName("Timeouts"));
