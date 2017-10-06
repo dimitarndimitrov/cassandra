@@ -41,6 +41,8 @@ import io.netty.handler.codec.compression.Lz4FrameEncoder;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.CompactEndpointSerializationHelper;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.MessagingVersion;
+import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.async.HandshakeProtocol.FirstHandshakeMessage;
 import org.apache.cassandra.net.async.HandshakeProtocol.ThirdHandshakeMessage;
 import org.apache.cassandra.net.async.InboundHandshakeHandler.State;
@@ -50,8 +52,8 @@ import static org.apache.cassandra.net.async.NettyFactory.Mode.MESSAGING;
 public class InboundHandshakeHandlerTest
 {
     private static final InetSocketAddress addr = new InetSocketAddress("127.0.0.1", 0);
-    private static final int MESSAGING_VERSION = MessagingService.current_version;
-    private static final int VERSION_30 = MessagingService.VERSION_30;
+    private static final ProtocolVersion CURRENT_VERSION = MessagingService.current_version.protocolVersion();
+    private static final ProtocolVersion VERSION_30 = MessagingVersion.OSS_30.protocolVersion();
 
     private InboundHandshakeHandler handler;
     private EmbeddedChannel channel;
@@ -114,7 +116,7 @@ public class InboundHandshakeHandlerTest
     public void decode_AlreadyFailed()
     {
         handler.setState(State.HANDSHAKE_FAIL);
-        buf = new FirstHandshakeMessage(MESSAGING_VERSION, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
+        buf = new FirstHandshakeMessage(CURRENT_VERSION, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
         handler.decode(channel.pipeline().firstContext(), buf, new ArrayList<>());
         Assert.assertFalse(channel.isOpen());
         Assert.assertFalse(channel.isActive());
@@ -138,7 +140,7 @@ public class InboundHandshakeHandlerTest
         EmbeddedChannel channel = new EmbeddedChannel(handler);
         buf = Unpooled.buffer(32, 32);
 
-        FirstHandshakeMessage first = new FirstHandshakeMessage(MESSAGING_VERSION,
+        FirstHandshakeMessage first = new FirstHandshakeMessage(CURRENT_VERSION,
                                                                 MESSAGING,
                                                                 true);
 
@@ -151,7 +153,9 @@ public class InboundHandshakeHandlerTest
     public void handleStart_VersionTooHigh() throws IOException
     {
         channel.eventLoop();
-        buf = new FirstHandshakeMessage(MESSAGING_VERSION + 1, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
+        int handshakeVersionTooHigh = CURRENT_VERSION.handshakeVersion + 1;
+        ProtocolVersion versionTooHigh = ProtocolVersion.fromHandshakeVersion(handshakeVersionTooHigh);
+        buf = new FirstHandshakeMessage(versionTooHigh, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
         State state = handler.handleStart(channel.pipeline().firstContext(), buf);
         Assert.assertEquals(State.HANDSHAKE_FAIL, state);
         Assert.assertFalse(channel.isOpen());
@@ -161,7 +165,9 @@ public class InboundHandshakeHandlerTest
     @Test
     public void handleStart_VersionLessThan3_0() throws IOException
     {
-        buf = new FirstHandshakeMessage(VERSION_30 - 1, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
+        int handshakeVersionLessThan3_0 = VERSION_30.handshakeVersion - 1;
+        ProtocolVersion versionLessThan3_0 = ProtocolVersion.fromHandshakeVersion(handshakeVersionLessThan3_0);
+        buf = new FirstHandshakeMessage(versionLessThan3_0, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
         State state = handler.handleStart(channel.pipeline().firstContext(), buf);
         Assert.assertEquals(State.HANDSHAKE_FAIL, state);
 
@@ -172,13 +178,13 @@ public class InboundHandshakeHandlerTest
     @Test
     public void handleStart_HappyPath_Messaging() throws IOException
     {
-        buf = new FirstHandshakeMessage(MESSAGING_VERSION, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
+        buf = new FirstHandshakeMessage(CURRENT_VERSION, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
         State state = handler.handleStart(channel.pipeline().firstContext(), buf);
         Assert.assertEquals(State.AWAIT_MESSAGING_START_RESPONSE, state);
         if (buf.refCnt() > 0)
             buf.release();
 
-        buf = new ThirdHandshakeMessage(MESSAGING_VERSION, addr.getAddress()).encode(PooledByteBufAllocator.DEFAULT);
+        buf = new ThirdHandshakeMessage(CURRENT_VERSION, addr.getAddress()).encode(PooledByteBufAllocator.DEFAULT);
         state = handler.handleMessagingStartResponse(channel.pipeline().firstContext(), buf);
 
         Assert.assertEquals(State.MESSAGING_HANDSHAKE_COMPLETE, state);
@@ -202,7 +208,7 @@ public class InboundHandshakeHandlerTest
     public void handleMessagingStartResponse_BadMaxVersion() throws IOException
     {
         buf = Unpooled.buffer(32, 32);
-        buf.writeInt(MESSAGING_VERSION + 1);
+        buf.writeInt(CURRENT_VERSION.handshakeVersion + 1);
         CompactEndpointSerializationHelper.serialize(addr.getAddress(), new ByteBufOutputStream(buf));
         State state = handler.handleMessagingStartResponse(channel.pipeline().firstContext(), buf);
         Assert.assertEquals(State.HANDSHAKE_FAIL, state);
@@ -214,7 +220,7 @@ public class InboundHandshakeHandlerTest
     public void handleMessagingStartResponse_HappyPath() throws IOException
     {
         buf = Unpooled.buffer(32, 32);
-        buf.writeInt(MESSAGING_VERSION);
+        buf.writeInt(CURRENT_VERSION.handshakeVersion);
         CompactEndpointSerializationHelper.serialize(addr.getAddress(), new ByteBufOutputStream(buf));
         State state = handler.handleMessagingStartResponse(channel.pipeline().firstContext(), buf);
         Assert.assertEquals(State.MESSAGING_HANDSHAKE_COMPLETE, state);
@@ -228,8 +234,8 @@ public class InboundHandshakeHandlerTest
         ChannelPipeline pipeline = channel.pipeline();
         Assert.assertNotNull(pipeline.get(InboundHandshakeHandler.class));
 
-        handler.setupMessagingPipeline(pipeline, addr.getAddress(), false, MESSAGING_VERSION);
-        Assert.assertNotNull(pipeline.get(MessageInHandler.class));
+        handler.setupMessagingPipeline(pipeline, addr.getAddress(), false, CURRENT_VERSION);
+        Assert.assertNotNull(pipeline.get(OSSInboundMessageHandler.class));
         Assert.assertNull(pipeline.get(Lz4FrameDecoder.class));
         Assert.assertNull(pipeline.get(Lz4FrameEncoder.class));
         Assert.assertNull(pipeline.get(InboundHandshakeHandler.class));
@@ -241,8 +247,8 @@ public class InboundHandshakeHandlerTest
         ChannelPipeline pipeline = channel.pipeline();
         Assert.assertNotNull(pipeline.get(InboundHandshakeHandler.class));
 
-        handler.setupMessagingPipeline(pipeline, addr.getAddress(), true, MESSAGING_VERSION);
-        Assert.assertNotNull(pipeline.get(MessageInHandler.class));
+        handler.setupMessagingPipeline(pipeline, addr.getAddress(), true, CURRENT_VERSION);
+        Assert.assertNotNull(pipeline.get(OSSInboundMessageHandler.class));
         Assert.assertNotNull(pipeline.get(Lz4FrameDecoder.class));
         Assert.assertNull(pipeline.get(Lz4FrameEncoder.class));
         Assert.assertNull(pipeline.get(InboundHandshakeHandler.class));

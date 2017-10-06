@@ -199,7 +199,7 @@ public class UnfilteredPartitionSerializer extends VersionDependent<EncodingVers
     }
 
     // Please note that this consume the iterator, and as such should not be called unless we have a simple way to
-    // recreate an iterator for both serialize and serializedSize, which is mostly only PartitionUpdate/ArrayBackedCachedPartition.
+    // recreate an iterator for both serialize and getSerializedSize, which is mostly only PartitionUpdate/ArrayBackedCachedPartition.
     public long serializedSize(UnfilteredRowIterator iterator, ColumnFilter selection, int rowEstimate)
     {
         SerializationHeader header = new SerializationHeader(false,

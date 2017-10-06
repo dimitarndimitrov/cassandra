@@ -26,6 +26,7 @@ import com.google.common.base.Preconditions;
 
 import io.netty.channel.WriteBufferWaterMark;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
+import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.async.OutboundHandshakeHandler.HandshakeResult;
 import org.apache.cassandra.utils.CoalescingStrategies.CoalescingStrategy;
 
@@ -47,7 +48,7 @@ public class OutboundConnectionParams
     final Supplier<QueuedMessage> backlogSupplier;
     final Consumer<MessageResult> messageResultConsumer;
     final WriteBufferWaterMark waterMark;
-    final int protocolVersion;
+    final ProtocolVersion protocolVersion;
 
     private OutboundConnectionParams(OutboundConnectionIdentifier connectionId,
                                      Consumer<HandshakeResult> callback,
@@ -60,7 +61,7 @@ public class OutboundConnectionParams
                                      Supplier<QueuedMessage> backlogSupplier,
                                      Consumer<MessageResult> messageResultConsumer,
                                      WriteBufferWaterMark waterMark,
-                                     int protocolVersion)
+                                     ProtocolVersion protocolVersion)
     {
         this.connectionId = connectionId;
         this.callback = callback;
@@ -99,7 +100,7 @@ public class OutboundConnectionParams
         private Supplier<QueuedMessage> backlogSupplier;
         private Consumer<MessageResult> messageResultConsumer;
         private WriteBufferWaterMark waterMark = WriteBufferWaterMark.DEFAULT;
-        int protocolVersion;
+        ProtocolVersion protocolVersion;
 
         private Builder()
         {   }
@@ -184,7 +185,7 @@ public class OutboundConnectionParams
             return this;
         }
 
-        public Builder protocolVersion(int protocolVersion)
+        public Builder protocolVersion(ProtocolVersion protocolVersion)
         {
             this.protocolVersion = protocolVersion;
             return this;
@@ -192,7 +193,7 @@ public class OutboundConnectionParams
 
         public OutboundConnectionParams build()
         {
-            Preconditions.checkArgument(protocolVersion > 0, "illegal protocol version: " + protocolVersion);
+            Preconditions.checkArgument(protocolVersion.handshakeVersion > 0, "illegal protocol version: " + protocolVersion.handshakeVersion);
             Preconditions.checkArgument(sendBufferSize > 0 && sendBufferSize < 1 << 20, "illegal send buffer size: " + sendBufferSize);
 
             return new OutboundConnectionParams(connectionId, callback, encryptionOptions, mode, compress, coalescingStrategy, sendBufferSize,

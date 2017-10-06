@@ -19,15 +19,16 @@ package org.apache.cassandra.net;
 
 import java.io.IOException;
 import java.net.InetAddress;
-
+import java.util.Map;
 import javax.annotation.Nullable;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 
-import org.apache.cassandra.concurrent.TracingAwareExecutor;
+import com.sun.xml.internal.ws.api.message.MessageMetadata;
 import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.DataOutputPlus;
+import org.apache.cassandra.net.async.OutboundMessagingPool;
 import org.apache.cassandra.net.interceptors.Interceptor;
 import org.apache.cassandra.tracing.Tracing;
 
@@ -77,7 +78,7 @@ public abstract class Message<P>
         }
     }
 
-    enum Kind
+    public enum Kind
     {
         GOSSIP, SMALL, LARGE;
 
@@ -244,7 +245,8 @@ public abstract class Message<P>
      * <p>
      * Request that are of one-way message definitions will always return -1.
      */
-    int id()
+    // TODO Find a more elegant approach to make this available for testing from other packages.
+    public int id()
     {
         return id;
     }
@@ -389,7 +391,7 @@ public abstract class Message<P>
         // Note that payloadSize is in the current messaging version, which may not be the version we're gonna send
         // the message in if there is mixed-versions nodes. This doesn't matter in practice though, as the version
         // won't dramatically change the size, which is good enough.
-        return messageData.payloadSize > OutboundTcpConnectionPool.LARGE_MESSAGE_THRESHOLD ? Kind.LARGE : Kind.SMALL;
+        return messageData.payloadSize > OutboundMessagingPool.LARGE_MESSAGE_THRESHOLD ? Kind.LARGE : Kind.SMALL;
     }
 
     @Override
@@ -405,8 +407,11 @@ public abstract class Message<P>
     public interface Serializer
     {
         public <P> void serialize(Message<P> message, DataOutputPlus out) throws IOException;
+        // TODO This should be made int, in order to be consistent with the majority of the code where message size
+        // is being used. Message size >2 GB may very well be a behavior-breaking edge case.
         public <P> long serializedSize(Message<P> message);
         public <P> Message<P> deserialize(DataInputPlus in, InetAddress from) throws IOException;
+        public <P> Message<P> deserializePayload(DataInputPlus in, Header headerParams) throws IOException;
 
         // Only abstracted here because the OSS side doesn't write the fully message serialized size (and so override this)
         default public void writeSerializedSize(int serializedSize, DataOutputPlus out) throws IOException
@@ -420,4 +425,6 @@ public abstract class Message<P>
             return in.readInt();
         }
     }
+
+    public interface Header { }
 }

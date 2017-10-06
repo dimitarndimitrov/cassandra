@@ -45,14 +45,14 @@ import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessageParameters;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.MessagingVersion;
+import org.apache.cassandra.net.OSSMessageHeader;
 import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.Verbs;
-import org.apache.cassandra.net.async.InboundOSSMessageHandler.MessageHeader;
 
-public class InboundOSSMessageHandlerTest
+public class OSSInboundMessageHandlerTest
 {
     private static final InetSocketAddress addr = new InetSocketAddress("127.0.0.1", 0);
-    private static final ProtocolVersion CURRENT_VERSION = MessagingService.current_version.protocolVersion();
+    private static final ProtocolVersion CURRENT_VERSION = MessagingVersion.OSS_40.protocolVersion();
 
     private static final int MSG_ID = 42;
 
@@ -74,12 +74,12 @@ public class InboundOSSMessageHandlerTest
     @Test
     public void decode_BadMagic() throws Exception
     {
-        int len = InboundOSSMessageHandler.FIRST_SECTION_BYTE_COUNT;
+        int len = OSSInboundMessageHandler.FIRST_SECTION_BYTE_COUNT;
         buf = Unpooled.buffer(len, len);
         buf.writeInt(-1);
         buf.writerIndex(len);
 
-        InboundOSSMessageHandler handler = new InboundOSSMessageHandler(addr.getAddress(), CURRENT_VERSION, null);
+        OSSInboundMessageHandler handler = new OSSInboundMessageHandler(addr.getAddress(), CURRENT_VERSION, null);
         EmbeddedChannel channel = new EmbeddedChannel(handler);
         Assert.assertTrue(channel.isOpen());
         channel.writeInbound(buf);
@@ -110,7 +110,7 @@ public class InboundOSSMessageHandlerTest
         serialize(outboundMessage);
 
         MessageWrapper wrapper = new MessageWrapper();
-        InboundOSSMessageHandler handler = new InboundOSSMessageHandler(addr.getAddress(), CURRENT_VERSION, wrapper.consumer);
+        OSSInboundMessageHandler handler = new OSSInboundMessageHandler(addr.getAddress(), CURRENT_VERSION, wrapper.consumer);
         List<Object> out = new ArrayList<>();
         handler.decode(null, buf, out);
 
@@ -144,15 +144,15 @@ public class InboundOSSMessageHandlerTest
         buf.writerIndex(originalWriterIndex - 6);
 
         MessageWrapper wrapper = new MessageWrapper();
-        InboundOSSMessageHandler handler = new InboundOSSMessageHandler(addr.getAddress(), CURRENT_VERSION, wrapper.consumer);
+        OSSInboundMessageHandler handler = new OSSInboundMessageHandler(addr.getAddress(), CURRENT_VERSION, wrapper.consumer);
         List<Object> out = new ArrayList<>();
         handler.decode(null, buf, out);
 
         Assert.assertNull(wrapper.message);
 
-        MessageHeader header = handler.getMessageHeader();
-        Assert.assertEquals(MSG_ID, wrapper.);
-        Assert.assertEquals(outboundMessage.verb(), );
+        OSSMessageHeader header = handler.getMessageHeader();
+        Assert.assertEquals(MSG_ID, header.messageId);
+        Assert.assertEquals(outboundMessage.verb(), header.verb.getDefinition());
         Assert.assertEquals(outboundMessage.from(), header.from);
         Assert.assertTrue(out.isEmpty());
 
@@ -167,7 +167,7 @@ public class InboundOSSMessageHandlerTest
     public void canReadNextParam_HappyPath() throws IOException
     {
         buildParamBuf(13);
-        Assert.assertTrue(InboundOSSMessageHandler.canReadNextParam(buf));
+        Assert.assertTrue(OSSInboundMessageHandler.canReadNextParam(buf));
     }
 
     @Test
@@ -175,7 +175,7 @@ public class InboundOSSMessageHandlerTest
     {
         buildParamBuf(13);
         buf.writerIndex(1);
-        Assert.assertFalse(InboundOSSMessageHandler.canReadNextParam(buf));
+        Assert.assertFalse(OSSInboundMessageHandler.canReadNextParam(buf));
     }
 
     @Test
@@ -183,7 +183,7 @@ public class InboundOSSMessageHandlerTest
     {
         buildParamBuf(13);
         buf.writerIndex(5);
-        Assert.assertFalse(InboundOSSMessageHandler.canReadNextParam(buf));
+        Assert.assertFalse(OSSInboundMessageHandler.canReadNextParam(buf));
     }
 
     @Test
@@ -191,7 +191,7 @@ public class InboundOSSMessageHandlerTest
     {
         buildParamBuf(13);
         buf.writerIndex(buf.writerIndex() - 13 - 2);
-        Assert.assertFalse(InboundOSSMessageHandler.canReadNextParam(buf));
+        Assert.assertFalse(OSSInboundMessageHandler.canReadNextParam(buf));
     }
 
     @Test
@@ -199,7 +199,7 @@ public class InboundOSSMessageHandlerTest
     {
         buildParamBuf(13);
         buf.writerIndex(buf.writerIndex() - 2);
-        Assert.assertFalse(InboundOSSMessageHandler.canReadNextParam(buf));
+        Assert.assertFalse(OSSInboundMessageHandler.canReadNextParam(buf));
     }
 
     private void buildParamBuf(int valueLength) throws IOException
@@ -215,7 +215,7 @@ public class InboundOSSMessageHandlerTest
     @Test
     public void exceptionHandled()
     {
-        InboundOSSMessageHandler handler = new InboundOSSMessageHandler(addr.getAddress(), CURRENT_VERSION, null);
+        OSSInboundMessageHandler handler = new OSSInboundMessageHandler(addr.getAddress(), CURRENT_VERSION, null);
         EmbeddedChannel channel = new EmbeddedChannel(handler);
         Assert.assertTrue(channel.isOpen());
         handler.exceptionCaught(channel.pipeline().firstContext(), new EOFException());

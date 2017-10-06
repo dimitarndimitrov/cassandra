@@ -621,7 +621,7 @@ public class ColumnFilter
                 }
             }
 
-            // Same concern than in serialize/serializedSize: we should be wary of the change in meaning for isFetchAll.
+            // Same concern than in serialize/getSerializedSize: we should be wary of the change in meaning for isFetchAll.
             // If we get a filter with isFetchAll from 3.0/3.x, it actually expects all static columns to be fetched,
             // make sure we do that (note that if queried == null, that's already what we do).
             // Note that here again this will make us do a bit more work that necessary, namely we'll _query_ all

@@ -39,14 +39,13 @@ import io.netty.handler.codec.compression.Lz4FrameDecoder;
 import io.netty.handler.codec.compression.Lz4FrameEncoder;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.async.HandshakeProtocol.SecondHandshakeMessage;
 import org.apache.cassandra.net.async.OutboundHandshakeHandler.HandshakeResult;
 
-import static org.apache.cassandra.net.async.OutboundHandshakeHandler.HandshakeResult.UNKNOWN_PROTOCOL_VERSION;
-
 public class OutboundHandshakeHandlerTest
 {
-    private static final int MESSAGING_VERSION = MessagingService.current_version;
+    private static final ProtocolVersion CURRENT_VERSION = MessagingService.current_version.protocolVersion();
     private static final InetSocketAddress localAddr = new InetSocketAddress("127.0.0.1", 0);
     private static final InetSocketAddress remoteAddr = new InetSocketAddress("127.0.0.2", 0);
     private static final String HANDLER_NAME = "clientHandshakeHandler";
@@ -74,7 +73,7 @@ public class OutboundHandshakeHandlerTest
                                          .connectionId(connectionId)
                                          .callback(handshakeResult -> callbackHandler.receive(handshakeResult))
                                          .mode(NettyFactory.Mode.MESSAGING)
-                                         .protocolVersion(MessagingService.current_version)
+                                         .protocolVersion(CURRENT_VERSION)
                                          .coalescingStrategy(Optional.empty())
                                          .build();
         handler = new OutboundHandshakeHandler(params);
@@ -102,13 +101,13 @@ public class OutboundHandshakeHandlerTest
     @Test
     public void decode_HappyPath() throws Exception
     {
-        buf = new SecondHandshakeMessage(MESSAGING_VERSION).encode(PooledByteBufAllocator.DEFAULT);
+        buf = new SecondHandshakeMessage(CURRENT_VERSION).encode(PooledByteBufAllocator.DEFAULT);
         channel.writeInbound(buf);
         Assert.assertEquals(1, channel.outboundMessages().size());
         Assert.assertTrue(channel.isOpen());
         Assert.assertTrue(channel.releaseOutbound()); // throw away any responses from decode()
 
-        Assert.assertEquals(MESSAGING_VERSION, callbackHandler.result.negotiatedMessagingVersion);
+        Assert.assertEquals(CURRENT_VERSION, callbackHandler.result.negotiatedProtocolVersion);
         Assert.assertEquals(HandshakeResult.Outcome.SUCCESS, callbackHandler.result.outcome);
     }
 
@@ -116,25 +115,25 @@ public class OutboundHandshakeHandlerTest
     public void decode_HappyPathThrowsException() throws Exception
     {
         callbackHandler.failOnCallback = true;
-        buf = new SecondHandshakeMessage(MESSAGING_VERSION).encode(PooledByteBufAllocator.DEFAULT);
+        buf = new SecondHandshakeMessage(CURRENT_VERSION).encode(PooledByteBufAllocator.DEFAULT);
         channel.writeInbound(buf);
         Assert.assertFalse(channel.isOpen());
         Assert.assertEquals(1, channel.outboundMessages().size());
         Assert.assertTrue(channel.releaseOutbound()); // throw away any responses from decode()
 
-        Assert.assertEquals(UNKNOWN_PROTOCOL_VERSION, callbackHandler.result.negotiatedMessagingVersion);
+        Assert.assertEquals(null, callbackHandler.result.negotiatedProtocolVersion);
         Assert.assertEquals(HandshakeResult.Outcome.NEGOTIATION_FAILURE, callbackHandler.result.outcome);
     }
 
     @Test
     public void decode_ReceivedLowerMsgVersion() throws Exception
     {
-        int msgVersion = MESSAGING_VERSION - 1;
-        buf = new SecondHandshakeMessage(msgVersion).encode(PooledByteBufAllocator.DEFAULT);
+        ProtocolVersion version = ProtocolVersion.fromHandshakeVersion(CURRENT_VERSION.handshakeVersion - 1);
+        buf = new SecondHandshakeMessage(version).encode(PooledByteBufAllocator.DEFAULT);
         channel.writeInbound(buf);
         Assert.assertTrue(channel.inboundMessages().isEmpty());
 
-        Assert.assertEquals(msgVersion, callbackHandler.result.negotiatedMessagingVersion);
+        Assert.assertEquals(version, callbackHandler.result.negotiatedProtocolVersion);
         Assert.assertEquals(HandshakeResult.Outcome.DISCONNECT, callbackHandler.result.outcome);
         Assert.assertFalse(channel.isOpen());
         Assert.assertTrue(channel.outboundMessages().isEmpty());
@@ -143,21 +142,21 @@ public class OutboundHandshakeHandlerTest
     @Test
     public void decode_ReceivedHigherMsgVersion() throws Exception
     {
-        int msgVersion = MESSAGING_VERSION - 1;
+        ProtocolVersion version = ProtocolVersion.fromHandshakeVersion(CURRENT_VERSION.handshakeVersion - 1);
         channel.pipeline().remove(HANDLER_NAME);
         params = OutboundConnectionParams.builder()
                                          .connectionId(connectionId)
                                          .callback(handshakeResult -> callbackHandler.receive(handshakeResult))
                                          .mode(NettyFactory.Mode.MESSAGING)
-                                         .protocolVersion(msgVersion)
+                                         .protocolVersion(version)
                                          .coalescingStrategy(Optional.empty())
                                          .build();
         handler = new OutboundHandshakeHandler(params);
         channel.pipeline().addFirst(HANDLER_NAME, handler);
-        buf = new SecondHandshakeMessage(MESSAGING_VERSION).encode(PooledByteBufAllocator.DEFAULT);
+        buf = new SecondHandshakeMessage(CURRENT_VERSION).encode(PooledByteBufAllocator.DEFAULT);
         channel.writeInbound(buf);
 
-        Assert.assertEquals(MESSAGING_VERSION, callbackHandler.result.negotiatedMessagingVersion);
+        Assert.assertEquals(CURRENT_VERSION, callbackHandler.result.negotiatedProtocolVersion);
         Assert.assertEquals(HandshakeResult.Outcome.DISCONNECT, callbackHandler.result.outcome);
     }
 
@@ -166,13 +165,13 @@ public class OutboundHandshakeHandlerTest
     {
         EmbeddedChannel chan = new EmbeddedChannel(new ChannelOutboundHandlerAdapter());
         ChannelPipeline pipeline =  chan.pipeline();
-        params = OutboundConnectionParams.builder(params).compress(true).protocolVersion(MessagingService.current_version).build();
+        params = OutboundConnectionParams.builder(params).compress(true).protocolVersion(CURRENT_VERSION).build();
         handler = new OutboundHandshakeHandler(params);
         pipeline.addFirst(handler);
-        handler.setupPipeline(chan, MESSAGING_VERSION);
+        handler.setupPipeline(chan, CURRENT_VERSION);
         Assert.assertNotNull(pipeline.get(Lz4FrameEncoder.class));
         Assert.assertNull(pipeline.get(Lz4FrameDecoder.class));
-        Assert.assertNotNull(pipeline.get(MessageOutHandler.class));
+        Assert.assertNotNull(pipeline.get(OutboundMessageHandler.class));
     }
 
     @Test
@@ -180,13 +179,13 @@ public class OutboundHandshakeHandlerTest
     {
         EmbeddedChannel chan = new EmbeddedChannel(new ChannelOutboundHandlerAdapter());
         ChannelPipeline pipeline =  chan.pipeline();
-        params = OutboundConnectionParams.builder(params).compress(false).protocolVersion(MessagingService.current_version).build();
+        params = OutboundConnectionParams.builder(params).compress(false).protocolVersion(CURRENT_VERSION).build();
         handler = new OutboundHandshakeHandler(params);
         pipeline.addFirst(handler);
-        handler.setupPipeline(chan, MESSAGING_VERSION);
+        handler.setupPipeline(chan, CURRENT_VERSION);
         Assert.assertNull(pipeline.get(Lz4FrameEncoder.class));
         Assert.assertNull(pipeline.get(Lz4FrameDecoder.class));
-        Assert.assertNotNull(pipeline.get(MessageOutHandler.class));
+        Assert.assertNotNull(pipeline.get(OutboundMessageHandler.class));
     }
 
     private static class CallbackHandler

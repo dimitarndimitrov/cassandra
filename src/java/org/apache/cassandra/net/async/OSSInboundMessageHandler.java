@@ -22,7 +22,6 @@ import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetAddress;
-import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -36,27 +35,15 @@ import org.slf4j.LoggerFactory;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
-import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.monitoring.ApproximateTime;
-import org.apache.cassandra.exceptions.RequestFailureReason;
 import org.apache.cassandra.exceptions.UnknownTableException;
-import org.apache.cassandra.net.CallbackInfo;
 import org.apache.cassandra.net.CompactEndpointSerializationHelper;
-import org.apache.cassandra.net.FailureResponse;
-import org.apache.cassandra.net.ForwardRequest;
 import org.apache.cassandra.net.Message;
-import org.apache.cassandra.net.MessageParameters;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.MessagingVersion;
-import org.apache.cassandra.net.OSSMessageSerializer;
-import org.apache.cassandra.net.OneWayRequest;
+import org.apache.cassandra.net.OSSMessageHeader;
+import org.apache.cassandra.net.OSSVerb;
 import org.apache.cassandra.net.ProtocolVersion;
-import org.apache.cassandra.net.Request;
-import org.apache.cassandra.net.Response;
-import org.apache.cassandra.net.Verb;
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.TimeoutSupplier;
 
 /**
  * Parses out individual messages from the incoming buffers. Each message, both header and payload, is incrementally
@@ -66,9 +53,9 @@ import org.apache.cassandra.utils.TimeoutSupplier;
  * behavior across {@link #decode(ChannelHandlerContext, ByteBuf, List)} invocations. That way we don't have to maintain
  * the not-fully consumed {@link ByteBuf}s.
  */
-class InboundOSSMessageHandler extends ByteToMessageDecoder
+class OSSInboundMessageHandler extends ByteToMessageDecoder
 {
-    public static final Logger logger = LoggerFactory.getLogger(InboundOSSMessageHandler.class);
+    public static final Logger logger = LoggerFactory.getLogger(OSSInboundMessageHandler.class);
 
     /**
      * The default target for consuming deserialized {@link Message}.
@@ -108,14 +95,15 @@ class InboundOSSMessageHandler extends ByteToMessageDecoder
     private final Consumer<Message<?>> messageConsumer;
 
     private State state;
-    private MessageHeader messageHeader;
+    private OSSMessageHeader.Builder builder;
+    private OSSMessageHeader header;
 
-    InboundOSSMessageHandler(InetAddress peer, ProtocolVersion protocolVersion)
+    OSSInboundMessageHandler(InetAddress peer, ProtocolVersion protocolVersion)
     {
         this(peer, protocolVersion, MESSAGING_SERVICE_CONSUMER);
     }
 
-    InboundOSSMessageHandler(InetAddress peer, ProtocolVersion protocolVersion, Consumer<Message<?>> messageConsumer)
+    OSSInboundMessageHandler(InetAddress peer, ProtocolVersion protocolVersion, Consumer<Message<?>> messageConsumer)
     {
         this.peer = peer;
         this.protocolVersion = protocolVersion;
@@ -124,7 +112,7 @@ class InboundOSSMessageHandler extends ByteToMessageDecoder
     }
 
     /**
-     * For each new message coming in, builds up a {@link MessageHeader} instance incrementally. This method
+     * For each new message coming in, builds up a {@link OSSMessageHeader} instance incrementally. This method
      * attempts to deserialize as much header information as it can out of the incoming {@link ByteBuf}, and
      * maintains a trivial state machine to remember progress across invocations.
      */
@@ -138,6 +126,8 @@ class InboundOSSMessageHandler extends ByteToMessageDecoder
             {
                 // an imperfect optimization around calling in.readableBytes() all the time
                 int readableBytes = in.readableBytes();
+                int parameterCount = 0;
+                Map<String, byte[]> parameters = null;
 
                 switch (state)
                 {
@@ -145,11 +135,12 @@ class InboundOSSMessageHandler extends ByteToMessageDecoder
                         if (readableBytes < FIRST_SECTION_BYTE_COUNT)
                             return;
                         MessagingService.validateMagic(in.readInt());
-                        messageHeader = new MessageHeader();
-                        messageHeader.messageId = in.readInt();
+                        builder = new OSSMessageHeader.Builder(MessagingVersion.from(protocolVersion));
+                        header = null;
+                        builder.setMessageId(in.readInt());
                         // make sure to read the sent timestamp, even if DatabaseDescriptor.hasCrossNodeTimeout() is not enabled
                         int messageTimestamp = in.readInt();
-                        messageHeader.constructionTime = deriveConstructionTime(peer, messageTimestamp);
+                        builder.setTimestampLoBits(messageTimestamp);
                         state = State.READ_IP_ADDRESS;
                         readableBytes -= FIRST_SECTION_BYTE_COUNT;
                         // fall-through
@@ -160,41 +151,45 @@ class InboundOSSMessageHandler extends ByteToMessageDecoder
                         int serializedAddrSize;
                         if (readableBytes < 1 || readableBytes < (serializedAddrSize = in.getByte(in.readerIndex()) + 1))
                             return;
-                        messageHeader.from = CompactEndpointSerializationHelper.deserialize(inputPlus);
+                        builder.setFrom(CompactEndpointSerializationHelper.deserialize(inputPlus));
                         state = State.READ_SECOND_CHUNK;
                         readableBytes -= serializedAddrSize;
                         // fall-through
                     case READ_SECOND_CHUNK:
                         if (readableBytes < SECOND_SECTION_BYTE_COUNT)
                             return;
-                        messageHeader.verb = OSSMessageSerializer.LEGACY_VERB_VALUES[in.readInt()];
-                        int paramCount = in.readInt();
-                        messageHeader.parameterCount = paramCount;
-                        messageHeader.parameters = paramCount == 0 ? Collections.emptyMap() : new HashMap<>();
+                        builder.setVerb(OSSVerb.getVerbById(in.readInt()));
+                        parameterCount = in.readInt();
+                        parameters = parameterCount == 0 ? Collections.emptyMap() : new HashMap<>();
+                        builder.setParameterCount(parameterCount);
                         state = State.READ_PARAMETERS_DATA;
                         readableBytes -= SECOND_SECTION_BYTE_COUNT;
                         // fall-through
                     case READ_PARAMETERS_DATA:
-                        if (messageHeader.parameterCount > 0)
+                        if (parameterCount > 0)
                         {
-                            if (!readParameters(in, inputPlus, messageHeader.parameterCount, messageHeader.parameters))
+                            if (!readParameters(in, inputPlus, parameterCount, parameters))
                                 return;
                             // we read an indeterminate number of bytes for the headers, so just ask the buffer again
                             readableBytes = in.readableBytes();
                         }
+                        builder.setParameters(parameters);
                         state = State.READ_PAYLOAD_SIZE;
                         // fall-through
                     case READ_PAYLOAD_SIZE:
                         if (readableBytes < 4)
                             return;
-                        messageHeader.payloadSize = in.readInt();
+                        builder.setPayloadSize(in.readInt());
+                        header = builder.build();
                         state = State.READ_PAYLOAD;
                         readableBytes -= 4;
                         // fall-through
                     case READ_PAYLOAD:
-                        if (readableBytes < messageHeader.payloadSize)
+                        if (readableBytes < header.payloadSize)
                             return;
 
+                        Message.Serializer serializer = Message.createSerializer(MessagingVersion.from(protocolVersion),
+                                                                                 ApproximateTime.currentTimeMillis());
                         // TODO consider deserializing the message not on the event loop
                         // Ideally we'd like to rely on the Message.Serializer abstraction to deserialize the incoming
                         // message, preferably by reading the serialized size of the whole frame, and then waiting
@@ -203,15 +198,15 @@ class InboundOSSMessageHandler extends ByteToMessageDecoder
                         // 1. Netty works best if either messages can be consumed in known, but variable-sized chunks
                         //    without a significant overhead, or sizing/framing info is available and can be used to
                         //    minimize decoding iterations.
-                        // 2. As of MessagingVersion.OSS_40, the OSS protocol includes solely the payload size, and
-                        //    that payload size can be found only after an unknown number of header bytes (hence the
-                        //    fairly convoluted decode() + readParameters()/canReadNextParam() combo).
-                        Message<Object> message = serializer.deserialize(inputPlus, messageHeader.from);
+                        // 2. As of MessagingVersion.OSS_40, the OSS protocol includes solely the payload (not the
+                        //    message/frame) size, and that payload size can be found only after an unknown number of
+                        //    header bytes (hence the fairly convoluted decode() implementation and readParameters() /
+                        //    canReadNextParam() combo).
+                        Message<Object> message = serializer.deserializePayload(inputPlus, header);
                         if (message != null)
                             messageConsumer.accept(message);
 
                         state = State.READ_FIRST_CHUNK;
-                        messageHeader = null;
                         break;
                     default:
                         throw new IllegalStateException("unknown/unhandled state: " + state);
@@ -316,46 +311,8 @@ class InboundOSSMessageHandler extends ByteToMessageDecoder
 
     // should ony be used for testing!!!
     @VisibleForTesting
-    MessageHeader getMessageHeader()
+    OSSMessageHeader getMessageHeader()
     {
-        return messageHeader;
-    }
-
-    private static long deriveConstructionTime(InetAddress from, int messageTimestamp)
-    {
-        // Reconstruct the message construction time sent by the remote host (we sent only the lower 4 bytes, assuming the
-        // higher 4 bytes wouldn't change between the sender and receiver)
-        long currentTime = ApproximateTime.currentTimeMillis();
-        long sentConstructionTime = (currentTime & 0xFFFFFFFF00000000L) | (((messageTimestamp & 0xFFFFFFFFL) << 2) >> 2);
-
-        // Because nodes may not have their clock perfectly in sync, it's actually possible the sentConstructionTime is
-        // later than the currentTime (the received time). If that's the case, as we definitively know there is a lack
-        // of proper synchronziation of the clock, we ignore sentConstructionTime. We also ignore that
-        // sentConstructionTime if we're told to.
-        long elapsed = currentTime - sentConstructionTime;
-        if (elapsed > 0)
-            MessagingService.instance().metrics.addTimeTaken(from, elapsed);
-
-        boolean useSentTime = DatabaseDescriptor.hasCrossNodeTimeout() && elapsed > 0;
-        return useSentTime ? sentConstructionTime : currentTime;
-    }
-
-    /**
-     * A simple struct to hold the message header data as it is being built up.
-     */
-    static class MessageHeader
-    {
-        int messageId;
-        long constructionTime;
-        InetAddress from;
-        OSSMessageSerializer.OSSVerb verb;
-        int payloadSize;
-
-        Map<String, byte[]> parameters = Collections.emptyMap();
-
-        /**
-         * Total number of incoming parameters.
-         */
-        int parameterCount;
+        return header;
     }
 }

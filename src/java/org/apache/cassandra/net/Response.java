@@ -119,7 +119,7 @@ public class Response<Q> extends Message<Q>
         callback.onResponse(this);
     }
 
-    long payloadSerializedSize(MessagingVersion version)
+    protected long payloadSerializedSize(MessagingVersion version)
     {
         return messageData.payloadSize >= 0 && version == MessagingService.current_version
                ? messageData.payloadSize

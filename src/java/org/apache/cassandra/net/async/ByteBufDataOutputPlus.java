@@ -22,12 +22,11 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.WritableByteChannel;
 
-import com.google.common.base.Function;
-
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufOutputStream;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.io.util.Memory;
+import org.apache.cassandra.io.util.ThrowingFunction;
 import org.apache.cassandra.io.util.UnbufferedDataOutputStreamPlus;
 import org.apache.cassandra.utils.memory.MemoryUtil;
 import org.apache.cassandra.utils.vint.VIntCoding;
@@ -82,7 +81,7 @@ public class ByteBufDataOutputPlus extends ByteBufOutputStream implements DataOu
     }
 
     @Override
-    public <R> R applyToChannel(Function<WritableByteChannel, R> c) throws IOException
+    public <R> R applyToChannel(ThrowingFunction<WritableByteChannel, R> c) throws IOException
     {
         throw new UnsupportedOperationException();
     }

@@ -269,7 +269,7 @@ public class Request<P, Q> extends Message<P>
                                                                messageData));
     }
 
-    long payloadSerializedSize(MessagingVersion version)
+    protected long payloadSerializedSize(MessagingVersion version)
     {
         return messageData.payloadSize >= 0 && version == MessagingService.current_version
                ? messageData.payloadSize

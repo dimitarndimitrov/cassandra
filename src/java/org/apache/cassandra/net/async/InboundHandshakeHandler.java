@@ -22,6 +22,8 @@ import io.netty.handler.ssl.SslHandler;
 import org.apache.cassandra.auth.IInternodeAuthenticator;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.MessagingVersion;
+import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.async.HandshakeProtocol.FirstHandshakeMessage;
 import org.apache.cassandra.net.async.HandshakeProtocol.SecondHandshakeMessage;
 import org.apache.cassandra.net.async.HandshakeProtocol.ThirdHandshakeMessage;
@@ -29,7 +31,7 @@ import org.apache.cassandra.net.async.HandshakeProtocol.ThirdHandshakeMessage;
 /**
  * 'Server'-side component that negotiates the internode handshake when establishing a new connection.
  * This handler will be the first in the netty channel for each incoming connection (secure socket (TLS) notwithstanding),
- * and once the handshake is successful, it will configure the proper handlers (mostly {@link MessageInHandler})
+ * and once the handshake is successful, it will configure the proper handlers (mostly {@link OSSInboundMessageHandler})
  * and remove itself from the working pipeline.
  */
 class InboundHandshakeHandler extends ByteToMessageDecoder
@@ -44,9 +46,9 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
     private boolean hasAuthenticated;
 
     /**
-     * The peer's declared messaging version.
+     * The peer's declared protocol version.
      */
-    private int version;
+    private ProtocolVersion version;
 
     /**
      * Does the peer support (or want to use) compressed data?
@@ -95,7 +97,7 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
         }
         catch (Exception e)
         {
-            logger.error("unexpected error while negotiating internode messaging handshake", e);
+            logger.error("unexpected error while negotiating internode protocol handshake", e);
             state = State.HANDSHAKE_FAIL;
             ctx.close();
         }
@@ -145,7 +147,7 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
     }
 
     /**
-     * Handles receiving the first message in the internode messaging handshake protocol. If the sender's protocol version
+     * Handles receiving the first message in the internode protocol handshake protocol. If the sender's protocol version
      * is accepted, we respond with the second message of the handshake protocol.
      */
     @VisibleForTesting
@@ -156,7 +158,7 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
             return State.START;
 
         logger.trace("received first handshake message from peer {}, message = {}", ctx.channel().remoteAddress(), msg);
-        version = msg.messagingVersion;
+        version = msg.version;
 
         if (msg.mode == NettyFactory.Mode.STREAMING)
         {
@@ -166,25 +168,30 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
         }
         else
         {
-            if (version < MessagingService.VERSION_30)
+            if (MessagingVersion.from(version) == null)
             {
-                logger.error("Unable to read obsolete message version {} from {}; The earliest version supported is 3.0.0", version, ctx.channel().remoteAddress());
+                logger.error("Unable to read obsolete handshake version {} from {}; The earliest version supported is {}",
+                             msg.version.handshakeVersion,
+                             ctx.channel().remoteAddress(),
+                             MessagingVersion.values()[0].protocolVersion().handshakeVersion);
                 ctx.close();
                 return State.HANDSHAKE_FAIL;
             }
 
-            logger.trace("Connection version {} from {}", version, ctx.channel().remoteAddress());
+            logger.trace("Connection version {} from {}", version.handshakeVersion, ctx.channel().remoteAddress());
             compressed = msg.compressionEnabled;
 
             // if this version is < the MS version the other node is trying
             // to connect with, the other node will disconnect
-            ctx.writeAndFlush(new SecondHandshakeMessage(MessagingService.current_version).encode(ctx.alloc()))
+            ctx.writeAndFlush(new SecondHandshakeMessage(MessagingService.current_version.protocolVersion()).encode(ctx.alloc()))
                .addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
 
             // outbound side will reconnect to change the version
-            if (version > MessagingService.current_version)
+            if (version.compareTo(MessagingService.current_version.protocolVersion()) > 0)
             {
-                logger.info("peer wants to use a messaging version higher ({}) than what this node supports ({})", version, MessagingService.current_version);
+                logger.info("peer wants to use a protocol version higher ({}) than what this node supports ({})",
+                            version.handshakeVersion,
+                            MessagingService.current_version.protocolVersion().handshakeVersion);
                 ctx.close();
                 return State.HANDSHAKE_FAIL;
             }
@@ -196,7 +203,7 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
     }
 
     /**
-     * Handles the third (and last) message in the internode messaging handshake protocol. Grabs the protocol version and
+     * Handles the third (and last) message in the internode protocol handshake protocol. Grabs the protocol version and
      * IP addr the peer wants to use.
      */
     @VisibleForTesting
@@ -213,30 +220,35 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
             handshakeTimeout = null;
         }
 
-        int maxVersion = msg.messagingVersion;
-        if (maxVersion > MessagingService.current_version)
+        ProtocolVersion maxVersion = msg.version;
+        if (maxVersion.compareTo(MessagingService.current_version.protocolVersion()) > 0)
         {
-            logger.error("peer wants to use a messaging version higher ({}) than what this node supports ({})", maxVersion, MessagingService.current_version);
+            logger.error("peer wants to use a protocol version higher ({}) than what this node supports ({})",
+                         maxVersion.handshakeVersion,
+                         MessagingService.current_version.protocolVersion().handshakeVersion);
             ctx.close();
             return State.HANDSHAKE_FAIL;
         }
 
         // record the (true) version of the endpoint
-        InetAddress from = msg.address;
-        MessagingService.instance().setVersion(from, maxVersion);
-        logger.trace("Set version for {} to {} (will use {})", from, maxVersion, MessagingService.instance().getVersion(from));
+        InetAddress peer = msg.address;
+        MessagingService.instance().setVersion(peer, MessagingVersion.from(maxVersion));
+        logger.trace("Set version for {} to {} (will use {})",
+                     peer,
+                     maxVersion.handshakeVersion,
+                     MessagingService.instance().getVersion(peer).protocolVersion().handshakeVersion);
 
-        setupMessagingPipeline(ctx.pipeline(), from, compressed, version);
+        setupMessagingPipeline(ctx.pipeline(), peer, compressed, version);
         return State.MESSAGING_HANDSHAKE_COMPLETE;
     }
 
     @VisibleForTesting
-    void setupMessagingPipeline(ChannelPipeline pipeline, InetAddress peer, boolean compressed, int messagingVersion)
+    void setupMessagingPipeline(ChannelPipeline pipeline, InetAddress peer, boolean compressed, ProtocolVersion version)
     {
         if (compressed)
-            pipeline.addLast(NettyFactory.INBOUND_COMPRESSOR_HANDLER_NAME, NettyFactory.createLz4Decoder(messagingVersion));
+            pipeline.addLast(NettyFactory.INBOUND_COMPRESSOR_HANDLER_NAME, NettyFactory.createLz4Decoder(version));
 
-        pipeline.addLast("messageInHandler", new MessageInHandler(peer, messagingVersion));
+        pipeline.addLast("messageInHandler", version.isDSE ? new InboundMessageHandler(peer, version) : new OSSInboundMessageHandler(peer, version));
         pipeline.remove(this);
     }
 

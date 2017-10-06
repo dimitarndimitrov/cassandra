@@ -342,7 +342,7 @@ public class ReadCommandTest
 //
 //        ReadCommand readCommand = Util.cmd(cfs, Util.dk("key")).includeRow("dd").build();
 //        int messagingVersion = MessagingService.current_version;
-//        long size = ReadCommand.serializer.serializedSize(readCommand, messagingVersion);
+//        long size = ReadCommand.serializer.getSerializedSize(readCommand, messagingVersion);
 //
 //        FakeOutputStream out = new FakeOutputStream();
 //        ReadCommand.serializer.serialize(readCommand, new WrappedDataOutputStreamPlus(out), messagingVersion);

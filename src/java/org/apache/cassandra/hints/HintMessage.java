@@ -199,7 +199,7 @@ public abstract class HintMessage
         protected long serializedSize(HintsVersion version)
         {
             if (this.version != version)
-                throw new IllegalArgumentException("serializedSize() called with non-matching version " + version);
+                throw new IllegalArgumentException("getSerializedSize() called with non-matching version " + version);
 
             return TypeSizes.sizeofUnsignedVInt(hint.remaining())
                    + hint.remaining();

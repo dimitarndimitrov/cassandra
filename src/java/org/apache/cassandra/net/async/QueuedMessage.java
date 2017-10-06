@@ -22,8 +22,7 @@ import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
 
-import org.apache.cassandra.net.MessageOut;
-import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.Message;
 import org.apache.cassandra.utils.CoalescingStrategies;
 
 /**
@@ -31,31 +30,30 @@ import org.apache.cassandra.utils.CoalescingStrategies;
  */
 public class QueuedMessage implements CoalescingStrategies.Coalescable
 {
-    public final MessageOut<?> message;
+    public final Message<?> message;
     public final int id;
     public final long timestampNanos;
-    public final boolean droppable;
     private final boolean retryable;
 
-    public QueuedMessage(MessageOut<?> message, int id)
+    public QueuedMessage(Message<?> message, int id)
     {
-        this(message, id, System.nanoTime(), MessagingService.DROPPABLE_VERBS.contains(message.verb), true);
+        this(message, id, System.nanoTime(), true);
     }
 
     @VisibleForTesting
-    public QueuedMessage(MessageOut<?> message, int id, long timestampNanos, boolean droppable, boolean retryable)
+    public QueuedMessage(Message<?> message, int id, long timestampNanos, boolean retryable)
     {
         this.message = message;
         this.id = id;
         this.timestampNanos = timestampNanos;
-        this.droppable = droppable;
         this.retryable = retryable;
     }
 
     /** don't drop a non-droppable message just because it's timestamp is expired */
     public boolean isTimedOut()
     {
-        return droppable && timestampNanos < System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(message.getTimeout());
+        // TODO Figure out if this should be fully replaced by (the currently non-public) Message.isTimedOut(long).
+        return !message.verb().isOneWay() && timestampNanos < System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(message.timeoutMillis());
     }
 
     public boolean shouldRetry()
@@ -65,7 +63,7 @@ public class QueuedMessage implements CoalescingStrategies.Coalescable
 
     public QueuedMessage createRetry()
     {
-        return new QueuedMessage(message, id, System.nanoTime(), droppable, false);
+        return new QueuedMessage(message, id, System.nanoTime(), false);
     }
 
     public long timestampNanos()

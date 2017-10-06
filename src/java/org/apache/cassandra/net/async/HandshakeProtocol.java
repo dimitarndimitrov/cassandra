@@ -31,6 +31,7 @@ import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
 import org.apache.cassandra.net.CompactEndpointSerializationHelper;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.ProtocolVersion;
 
 /**
  * Messages for the handshake phase of the internode protocol.
@@ -65,9 +66,9 @@ public class HandshakeProtocol
      *                      1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
      *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
      * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-     * |U U C M       |                |                               |
-     * |N N M O       |     VERSION    |             unused            |
-     * |U U P D       |                |                               |
+     * |U U C M        |               |                               |
+     * |N N M O        |    VERSION    |             unused            |
+     * |U U P D        |               |                               |
      * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
      * }
      * </pre>
@@ -82,14 +83,13 @@ public class HandshakeProtocol
         /** Contains the PROTOCOL_MAGIC (int) and the flags (int). */
         private static final int LENGTH = 8;
 
-        final int messagingVersion;
+        final ProtocolVersion version;
         final NettyFactory.Mode mode;
         final boolean compressionEnabled;
 
-        public FirstHandshakeMessage(int messagingVersion, NettyFactory.Mode mode, boolean compressionEnabled)
+        public FirstHandshakeMessage(ProtocolVersion version, NettyFactory.Mode mode, boolean compressionEnabled)
         {
-            assert messagingVersion > 0;
-            this.messagingVersion = messagingVersion;
+            this.version = version;
             this.mode = mode;
             this.compressionEnabled = compressionEnabled;
         }
@@ -102,8 +102,7 @@ public class HandshakeProtocol
                 flags |= 1 << 2;
             if (mode == NettyFactory.Mode.STREAMING)
                 flags |= 1 << 3;
-
-            flags |= (messagingVersion << 8);
+            flags |= (version.handshakeVersion << 8);
             return flags;
         }
 
@@ -123,12 +122,12 @@ public class HandshakeProtocol
 
             MessagingService.validateMagic(in.readInt());
             int flags = in.readInt();
-            int version = MessagingService.getBits(flags, 15, 8);
+            int handshakeVersion = MessagingService.getBits(flags, 15, 8);
             NettyFactory.Mode mode = MessagingService.getBits(flags, 3, 1) == 1
                                      ? NettyFactory.Mode.STREAMING
                                      : NettyFactory.Mode.MESSAGING;
             boolean compressed = MessagingService.getBits(flags, 2, 1) == 1;
-            return new FirstHandshakeMessage(version, mode, compressed);
+            return new FirstHandshakeMessage(ProtocolVersion.fromHandshakeVersion(handshakeVersion), mode, compressed);
         }
 
         @Override
@@ -138,7 +137,7 @@ public class HandshakeProtocol
                 return false;
 
             FirstHandshakeMessage that = (FirstHandshakeMessage)other;
-            return this.messagingVersion == that.messagingVersion
+            return this.version == that.version
                    && this.mode == that.mode
                    && this.compressionEnabled == that.compressionEnabled;
         }
@@ -146,70 +145,70 @@ public class HandshakeProtocol
         @Override
         public int hashCode()
         {
-            return Objects.hash(messagingVersion, mode, compressionEnabled);
+            return Objects.hash(version, mode, compressionEnabled);
         }
 
         @Override
         public String toString()
         {
-            return String.format("FirstHandshakeMessage - messaging version: %d, mode: %s, compress: %b", messagingVersion, mode, compressionEnabled);
+            return String.format("FirstHandshakeMessage - handshake version: %d, mode: %s, compress: %b", version, mode, compressionEnabled);
         }
     }
 
     /**
      * The second message of the handshake, sent by the node receiving the {@link FirstHandshakeMessage} back to the
-     * connection initiator. This message contains the messaging version of the peer sending this message,
+     * connection initiator. This message contains the protocol version of the peer sending this message,
      * so {@link org.apache.cassandra.net.MessagingService#current_version}.
      */
     static class SecondHandshakeMessage
     {
-        /** The messaging version sent by the receiving peer (int). */
+        /** The handshake version sent by the receiving peer (int). */
         private static final int LENGTH = 4;
 
-        final int messagingVersion;
+        final ProtocolVersion version;
 
-        SecondHandshakeMessage(int messagingVersion)
+        SecondHandshakeMessage(ProtocolVersion version)
         {
-            this.messagingVersion = messagingVersion;
+            this.version = version;
         }
 
         public ByteBuf encode(ByteBufAllocator allocator)
         {
             ByteBuf buffer = allocator.directBuffer(LENGTH, LENGTH);
             buffer.writerIndex(0);
-            buffer.writeInt(messagingVersion);
+            buffer.writeInt(version.handshakeVersion);
             return buffer;
         }
 
         static SecondHandshakeMessage maybeDecode(ByteBuf in)
         {
-            return in.readableBytes() >= LENGTH ? new SecondHandshakeMessage(in.readInt()) : null;
+            return in.readableBytes() >= LENGTH ? new SecondHandshakeMessage(ProtocolVersion.fromHandshakeVersion(in.readInt())) : null;
         }
 
         @Override
         public boolean equals(Object other)
         {
             return other instanceof SecondHandshakeMessage
-                   && this.messagingVersion == ((SecondHandshakeMessage) other).messagingVersion;
+                   && this.version.handshakeVersion == ((SecondHandshakeMessage) other).version.handshakeVersion;
         }
 
         @Override
         public int hashCode()
         {
-            return Integer.hashCode(messagingVersion);
+            return Integer.hashCode(version.handshakeVersion);
         }
 
         @Override
         public String toString()
         {
-            return String.format("SecondHandshakeMessage - messaging version: %d", messagingVersion);
+            return String.format("SecondHandshakeMessage - handshake version: %d", version.handshakeVersion);
         }
     }
 
     /**
      * The third message of the handshake, sent by the connection initiator on reception of {@link SecondHandshakeMessage}.
      * This message contains:
-     *   1) the connection initiator's messaging version (4 bytes) - {@link org.apache.cassandra.net.MessagingService#current_version}.
+     *   1) the connection initiator's handshake version (4 bytes) - {@link org.apache.cassandra.net.MessagingService#current_version}.
      *   2) the connection initiator's broadcast address as encoded by {@link org.apache.cassandra.net.CompactEndpointSerializationHelper}.
      *      This can be either 5 bytes for an IPv4 address, or 17 bytes for an IPv6 one.
      * <p>
@@ -226,12 +225,12 @@ public class HandshakeProtocol
          */
         private static final int MIN_LENGTH = 9;
 
-        final int messagingVersion;
+        final ProtocolVersion version;
         final InetAddress address;
 
-        ThirdHandshakeMessage(int messagingVersion, InetAddress address)
+        ThirdHandshakeMessage(ProtocolVersion version, InetAddress address)
         {
-            this.messagingVersion = messagingVersion;
+            this.version = version;
             this.address = address;
         }
 
@@ -241,7 +240,7 @@ public class HandshakeProtocol
             int bufLength = Integer.BYTES + CompactEndpointSerializationHelper.serializedSize(address);
             ByteBuf buffer = allocator.directBuffer(bufLength, bufLength);
             buffer.writerIndex(0);
-            buffer.writeInt(messagingVersion);
+            buffer.writeInt(version.handshakeVersion);
             try
             {
                 DataOutput bbos = new ByteBufOutputStream(buffer);
@@ -262,12 +261,12 @@ public class HandshakeProtocol
                 return null;
 
             in.markReaderIndex();
-            int version = in.readInt();
+            int handshakeVersion = in.readInt();
             DataInput inputStream = new ByteBufInputStream(in);
             try
             {
                 InetAddress address = CompactEndpointSerializationHelper.deserialize(inputStream);
-                return new ThirdHandshakeMessage(version, address);
+                return new ThirdHandshakeMessage(ProtocolVersion.fromHandshakeVersion(handshakeVersion), address);
             }
             catch (IOException e)
             {
@@ -284,21 +283,21 @@ public class HandshakeProtocol
             if (!(other instanceof ThirdHandshakeMessage))
                 return false;
 
-            ThirdHandshakeMessage that = (ThirdHandshakeMessage)other;
-            return this.messagingVersion == that.messagingVersion
+            ThirdHandshakeMessage that = (ThirdHandshakeMessage) other;
+            return this.version.handshakeVersion == that.version.handshakeVersion
                    && Objects.equals(this.address, that.address);
         }
 
         @Override
         public int hashCode()
         {
-            return Objects.hash(messagingVersion, address);
+            return Objects.hash(version.handshakeVersion, address);
         }
 
         @Override
         public String toString()
         {
-            return String.format("ThirdHandshakeMessage - messaging version: %d, address = %s", messagingVersion, address);
+            return String.format("ThirdHandshakeMessage - handshake version: %d, address = %s", version.handshakeVersion, address);
         }
     }
 }

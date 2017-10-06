@@ -24,13 +24,12 @@ import java.util.Optional;
 import com.google.common.annotations.VisibleForTesting;
 
 import org.apache.cassandra.auth.IInternodeAuthenticator;
-import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
 import org.apache.cassandra.metrics.ConnectionMetrics;
 import org.apache.cassandra.net.BackPressureState;
-import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.async.OutboundConnectionIdentifier.ConnectionType;
 import org.apache.cassandra.utils.CoalescingStrategies;
 import org.apache.cassandra.utils.CoalescingStrategies.CoalescingStrategy;
@@ -43,7 +42,7 @@ import org.apache.cassandra.utils.CoalescingStrategies.CoalescingStrategy;
 public class OutboundMessagingPool
 {
     @VisibleForTesting
-    static final long LARGE_MESSAGE_THRESHOLD = Long.getLong(Config.PROPERTY_PREFIX + "otcp_large_message_threshold", 1024 * 64);
+    public static final long LARGE_MESSAGE_THRESHOLD = Long.getLong(Config.PROPERTY_PREFIX + "otcp_large_message_threshold", 1024 * 64);
 
     private final ConnectionMetrics metrics;
     private final BackPressureState backPressureState;
@@ -92,20 +91,24 @@ public class OutboundMessagingPool
         return backPressureState;
     }
 
-    public void sendMessage(MessageOut msg, int id)
+    // TODO Consider removing the id parameter (Message has an id()  method)
+    public void sendMessage(Message<?> msg, int id)
     {
         getConnection(msg).sendMessage(msg, id);
     }
 
     @VisibleForTesting
-    public OutboundMessagingConnection getConnection(MessageOut msg)
+    public OutboundMessagingConnection getConnection(Message<?> msg)
     {
+        Message.Kind kind = msg.kind();
         // optimize for the common path (the small message channel)
-        if (Stage.GOSSIP != msg.getStage())
+        if (Message.Kind.SMALL.equals(kind))
         {
-            return msg.serializedSize(smallMessageChannel.getTargetVersion()) < LARGE_MESSAGE_THRESHOLD
-            ? smallMessageChannel
-            : largeMessageChannel;
+            return smallMessageChannel;
+        }
+        if (Message.Kind.LARGE.equals(kind))
+        {
+            return largeMessageChannel;
         }
         return gossipChannel;
     }

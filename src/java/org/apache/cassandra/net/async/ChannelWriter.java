@@ -67,7 +67,7 @@ import org.apache.cassandra.utils.CoalescingStrategies.CoalescingStrategy;
  *  1) After any message <b>if</b> there is no pending message in the send queue.
  *  2) When we've filled up or exceeded the netty outbound buffer (see {@link ChannelOutboundBuffer})
  * <p>
- * The second part is relatively simple and handled generically in {@link MessageOutHandler#write(ChannelHandlerContext, Object, ChannelPromise)} [1].
+ * The second part is relatively simple and handled generically in {@link OutboundMessageHandler#write(ChannelHandlerContext, Object, ChannelPromise)} [1].
  * The first part however is made a little more complicated by how netty's event loop executes. It is woken up by
  * external callers to the channel invoking a flush, via either {@link Channel#flush} or one of the {@link Channel#writeAndFlush}
  * methods [2]. So a plain {@link Channel#write} will only queue the message in the channel, and not wake up the event loop.
@@ -76,7 +76,7 @@ import org.apache.cassandra.utils.CoalescingStrategies.CoalescingStrategy;
  * also don't want to flush on every message if there is more in the sending queue, so simply calling
  * {@link Channel#writeAndFlush} isn't completely appropriate either. In practice, we handle this by calling
  * {@link Channel#writeAndFlush} (so the netty event loop <b>does</b> wake up), but we override the flush behavior so
- * it actually only flushes if there are no pending messages (see how {@link MessageOutHandler#flush} delegates the flushing
+ * it actually only flushes if there are no pending messages (see how {@link OutboundMessageHandler#flush} delegates the flushing
  * decision back to this class through {@link #onTriggeredFlush}, and how {@link SimpleChannelWriter} makes this a no-op;
  * instead {@link SimpleChannelWriter} flushes after any message if there are no more pending ones in
  * {@link #onMessageProcessed}).
@@ -111,10 +111,10 @@ import org.apache.cassandra.utils.CoalescingStrategies.CoalescingStrategy;
  *
  * <h3>Failure to make progress sending bytes</h3>
  * If we are unable to make progress sending messages, we'll receive a netty notification
- * ({@link IdleStateEvent}) at {@link MessageOutHandler#userEventTriggered(ChannelHandlerContext, Object)}.
+ * ({@link IdleStateEvent}) at {@link OutboundMessageHandler#userEventTriggered(ChannelHandlerContext, Object)}.
  * We then want to close the socket/channel, and purge any messages in {@link OutboundMessagingConnection#backlog}
  * to try to free up memory as quickly as possible. Any messages in the netty pipeline will be marked as fail
- * (as we close the channel), but {@link MessageOutHandler#userEventTriggered(ChannelHandlerContext, Object)} also
+ * (as we close the channel), but {@link OutboundMessageHandler#userEventTriggered(ChannelHandlerContext, Object)} also
  * sets a channel attribute, {@link #PURGE_MESSAGES_CHANNEL_ATTR} to true. This is essentially as special flag
  * that we can look at in the promise handler code ({@link #handleMessageFuture(Future, QueuedMessage, boolean)})
  * to indicate that any backlog should be thrown away.
@@ -320,7 +320,7 @@ abstract class ChannelWriter
             pendingMessageCount.incrementAndGet();
             // We don't truly want to flush on every message but we do want to wake-up the netty event loop for the
             // channel so the message is processed right away, which is why we use writeAndFlush. This won't actually
-            // flush, though, because onTriggeredFlush, which MessageOutHandler delegates to, does nothing. We will
+            // flush, though, because onTriggeredFlush, which OutboundMessageHandler delegates to, does nothing. We will
             // flush after the message is processed though if there is no pending one due to onMessageProcessed.
             // See the class javadoc for context and much more details.
             return channel.writeAndFlush(message);

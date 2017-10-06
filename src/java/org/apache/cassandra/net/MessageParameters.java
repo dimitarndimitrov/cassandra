@@ -106,6 +106,8 @@ public class MessageParameters
         return parameters.get(key);
     }
 
+    public int size() { return parameters.size(); }
+
     public static Builder builder()
     {
         return new Builder();

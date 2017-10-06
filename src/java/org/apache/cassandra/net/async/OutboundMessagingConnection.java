@@ -43,8 +43,10 @@ import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
-import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.MessagingVersion;
+import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.async.NettyFactory.Mode;
 import org.apache.cassandra.net.async.OutboundHandshakeHandler.HandshakeResult;
 import org.apache.cassandra.utils.CoalescingStrategies;
@@ -56,7 +58,7 @@ import org.apache.cassandra.utils.NoSpamLogger;
  * Represents one connection to a peer, and handles the state transistions on the connection and the netty {@link Channel}
  * The underlying socket is not opened until explicitly requested (by sending a message).
  *
- * The basic setup for the channel is like this: a message is requested to be sent via {@link #sendMessage(MessageOut, int)}.
+ * The basic setup for the channel is like this: a message is requested to be sent via {@link #sendMessage(Message, int)}.
  * If the channel is not established, then we need to create it (obviously). To prevent multiple threads from creating
  * independent connections, they attempt to update the {@link #state}; one thread will win the race and create the connection.
  * Upon sucessfully setting up the connection/channel, the {@link #state} will be updated again (to {@link State#READY},
@@ -148,7 +150,7 @@ public class OutboundMessagingConnection
     /**
      * the target protocol version to communicate to the peer with, discovered/negotiated via handshaking
      */
-    private int targetVersion;
+    private ProtocolVersion targetProtocolVersion;
 
     OutboundMessagingConnection(OutboundConnectionIdentifier connectionId,
                                 ServerEncryptionOptions encryptionOptions,
@@ -182,7 +184,7 @@ public class OutboundMessagingConnection
         // unless it has been gossiped to us or it has connected to us, and in both cases that will set the version).
         // In that case we won't rely on that targetVersion before we're actually connected and so the version
         // detection in connect() will do its job.
-        targetVersion = MessagingService.instance().getVersion(connectionId.remote());
+        targetProtocolVersion = MessagingService.instance().getVersion(connectionId.remote()).protocolVersion();
     }
 
     /**
@@ -192,9 +194,9 @@ public class OutboundMessagingConnection
      *
      * @return true if the message was accepted by the {@link #channelWriter}; else false if it was not accepted
      * and added to the backlog or the channel is {@link State#CLOSED}. See documentation in {@link ChannelWriter} and
-     * {@link MessageOutHandler} how the backlogged messages get consumed.
+     * {@link OutboundMessageHandler} how the backlogged messages get consumed.
      */
-    boolean sendMessage(MessageOut msg, int id)
+    boolean sendMessage(Message msg, int id)
     {
         return sendMessage(new QueuedMessage(msg, id));
     }
@@ -306,7 +308,7 @@ public class OutboundMessagingConnection
                                                                   .tcpNoDelay(tcpNoDelay)
                                                                   .backlogSupplier(() -> nextBackloggedMessage())
                                                                   .messageResultConsumer(this::handleMessageResult)
-                                                                  .protocolVersion(targetVersion)
+                                                                  .protocolVersion(targetProtocolVersion)
                                                                   .build();
 
         return NettyFactory.instance.createOutboundBootstrap(params);
@@ -441,10 +443,10 @@ public class OutboundMessagingConnection
         }
         connectAttemptCount = 0;
 
-        if (result.negotiatedMessagingVersion != HandshakeResult.UNKNOWN_PROTOCOL_VERSION)
+        if (result.negotiatedProtocolVersion != null)
         {
-            targetVersion = result.negotiatedMessagingVersion;
-            MessagingService.instance().setVersion(connectionId.remote(), targetVersion);
+            targetProtocolVersion = result.negotiatedProtocolVersion;
+            MessagingService.instance().setVersion(connectionId.remote(), MessagingVersion.from(targetProtocolVersion));
         }
 
         switch (result.outcome)
@@ -490,9 +492,9 @@ public class OutboundMessagingConnection
         return true;
     }
 
-    int getTargetVersion()
+    ProtocolVersion getTargetVersion()
     {
-        return targetVersion;
+        return targetProtocolVersion;
     }
 
     /**
@@ -507,7 +509,7 @@ public class OutboundMessagingConnection
 
         // checking the cause() is an optimized way to tell if the operation was successful (as the cause will be null)
         // Note that ExpiredException is just a marker for timeout-ed message we're dropping, but as we already
-        // incremented the dropped message count in MessageOutHandler, we have nothing to do.
+        // incremented the dropped message count in OutboundMessageHandler, we have nothing to do.
         Throwable cause = messageResult.future.cause();
         if (cause == null)
             return;
@@ -686,9 +688,9 @@ public class OutboundMessagingConnection
     }
 
     @VisibleForTesting
-    void setTargetVersion(int targetVersion)
+    void setTargetVersion(ProtocolVersion targetVersion)
     {
-        this.targetVersion = targetVersion;
+        this.targetProtocolVersion = targetVersion;
     }
 
     @VisibleForTesting

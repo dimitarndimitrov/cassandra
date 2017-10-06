@@ -42,8 +42,11 @@ import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.io.util.Memory;
 import org.apache.cassandra.io.util.SafeMemory;
+import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.Verbs;
 import org.apache.cassandra.schema.KeyspaceParams;
+import org.apache.cassandra.utils.FBUtilities;
 
 public class ByteBufDataOutputPlusTest
 {
@@ -74,17 +77,20 @@ public class ByteBufDataOutputPlusTest
     @Test
     public void compareBufferSizes() throws IOException
     {
-        final int currentFrameSize = getMessage().message.serializedSize(MessagingService.current_version);
+        Message.Serializer serializer = Message.createSerializer(MessagingService.current_version, -1);
+        final int currentFrameSize = (int) serializer.serializedSize(getMessage().message);//getMessage().message.serializedSize(MessagingService.current_version);
 
         ByteBuffer buffer = ByteBuffer.allocateDirect(currentFrameSize); //bufferedOut.nioBuffer(0, bufferedOut.writableBytes());
-        getMessage().message.serialize(new DataOutputBuffer(buffer), MessagingService.current_version);
+        //getMessage().message.serialize(new DataOutputBuffer(buffer), MessagingService.current_version);
+        serializer.serialize(getMessage().message, new DataOutputBuffer(buffer));
         Assert.assertFalse(buffer.hasRemaining());
         Assert.assertEquals(buffer.capacity(), buffer.position());
 
         ByteBuf bbosOut = PooledByteBufAllocator.DEFAULT.ioBuffer(currentFrameSize, currentFrameSize);
         try
         {
-            getMessage().message.serialize(new ByteBufDataOutputPlus(bbosOut), MessagingService.current_version);
+            //getMessage().message.serialize(new ByteBufDataOutputPlus(bbosOut), MessagingService.current_version);
+            serializer.serialize(getMessage().message, new ByteBufDataOutputPlus(bbosOut));
 
             Assert.assertFalse(bbosOut.isWritable());
             Assert.assertEquals(bbosOut.capacity(), bbosOut.writerIndex());
@@ -111,7 +117,8 @@ public class ByteBufDataOutputPlusTest
             rowUpdateBuilder.add("val" + i, buf);
 
         Mutation mutation = rowUpdateBuilder.build();
-        return new QueuedMessage(mutation.createMessage(), 42);
+
+        return new QueuedMessage(Verbs.WRITES.WRITE.newRequest(FBUtilities.getBroadcastAddress(), mutation), 42);
     }
 
     @Test

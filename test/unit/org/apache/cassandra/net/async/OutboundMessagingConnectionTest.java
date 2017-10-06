@@ -46,15 +46,19 @@ import org.apache.cassandra.auth.IInternodeAuthenticator;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.exceptions.ConfigurationException;
+import org.apache.cassandra.gms.GossipDigestAck;
 import org.apache.cassandra.locator.AbstractEndpointSnitch;
 import org.apache.cassandra.locator.IEndpointSnitch;
-import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.EmptyPayload;
+import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.MessagingServiceTest;
+import org.apache.cassandra.net.ProtocolVersion;
+import org.apache.cassandra.net.Request;
+import org.apache.cassandra.net.Verbs;
 import org.apache.cassandra.net.async.OutboundHandshakeHandler.HandshakeResult;
 import org.apache.cassandra.net.async.OutboundMessagingConnection.State;
 
-import static org.apache.cassandra.net.MessagingService.Verb.ECHO;
 import static org.apache.cassandra.net.async.OutboundMessagingConnection.State.CLOSED;
 import static org.apache.cassandra.net.async.OutboundMessagingConnection.State.CREATING_CHANNEL;
 import static org.apache.cassandra.net.async.OutboundMessagingConnection.State.NOT_READY;
@@ -65,7 +69,7 @@ public class OutboundMessagingConnectionTest
     private static final InetSocketAddress LOCAL_ADDR = new InetSocketAddress("127.0.0.1", 9998);
     private static final InetSocketAddress REMOTE_ADDR = new InetSocketAddress("127.0.0.2", 9999);
     private static final InetSocketAddress RECONNECT_ADDR = new InetSocketAddress("127.0.0.3", 9999);
-    private static final int MESSAGING_VERSION = MessagingService.current_version;
+    private static final ProtocolVersion CURRENT_VERSION = MessagingService.current_version.protocolVersion();
 
     private OutboundConnectionIdentifier connectionId;
     private OutboundMessagingConnection omc;
@@ -102,7 +106,8 @@ public class OutboundMessagingConnectionTest
     {
         Assert.assertEquals(0, omc.backlogSize());
         omc.setState(CREATING_CHANNEL);
-        Assert.assertTrue(omc.sendMessage(new MessageOut<>(ECHO), 1));
+        Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(LOCAL_ADDR.getAddress(), EmptyPayload.instance);
+        Assert.assertTrue(omc.sendMessage(outboundMessage, outboundMessage.id()));
         Assert.assertEquals(1, omc.backlogSize());
         Assert.assertEquals(1, omc.getPendingMessages().intValue());
     }
@@ -112,7 +117,8 @@ public class OutboundMessagingConnectionTest
     {
         Assert.assertEquals(0, omc.backlogSize());
         omc.setState(READY);
-        Assert.assertTrue(omc.sendMessage(new MessageOut<>(ECHO), 1));
+        Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(LOCAL_ADDR.getAddress(), EmptyPayload.instance);
+        Assert.assertTrue(omc.sendMessage(outboundMessage, outboundMessage.id()));
         Assert.assertEquals(0, omc.backlogSize());
         Assert.assertTrue(channel.releaseOutbound());
     }
@@ -122,7 +128,8 @@ public class OutboundMessagingConnectionTest
     {
         Assert.assertEquals(0, omc.backlogSize());
         omc.setState(CLOSED);
-        Assert.assertFalse(omc.sendMessage(new MessageOut<>(ECHO), 1));
+        Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(LOCAL_ADDR.getAddress(), EmptyPayload.instance);
+        Assert.assertTrue(omc.sendMessage(outboundMessage, outboundMessage.id()));
         Assert.assertEquals(0, omc.backlogSize());
         Assert.assertFalse(channel.releaseOutbound());
     }
@@ -204,7 +211,10 @@ public class OutboundMessagingConnectionTest
     {
         int count = 32;
         for (int i = 0; i < count; i++)
-            omc.addToBacklog(new QueuedMessage(new MessageOut<>(ECHO), i));
+        {
+            Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(LOCAL_ADDR.getAddress(), EmptyPayload.instance);
+            omc.addToBacklog(new QueuedMessage(outboundMessage, i));
+        }
         Assert.assertEquals(count, omc.backlogSize());
         Assert.assertEquals(count, omc.getPendingMessages().intValue());
 
@@ -245,10 +255,13 @@ public class OutboundMessagingConnectionTest
             }
         };
 
-        MessageOut messageOut = new MessageOut(MessagingService.Verb.GOSSIP_DIGEST_ACK);
-        OutboundMessagingPool pool = new OutboundMessagingPool(REMOTE_ADDR, LOCAL_ADDR, null,
-                                                               new MessagingServiceTest.MockBackPressureStrategy(null).newState(REMOTE_ADDR.getAddress()), auth);
-        omc = pool.getConnection(messageOut);
+        Message<?> outboundMessage = Verbs.GOSSIP.ACK.newRequest(REMOTE_ADDR.getAddress(), (GossipDigestAck) null);
+        OutboundMessagingPool pool = new OutboundMessagingPool(REMOTE_ADDR,
+                                                               LOCAL_ADDR,
+                                                               null,
+                                                               new MessagingServiceTest.MockBackPressureStrategy(null).newState(REMOTE_ADDR.getAddress()),
+                                                               auth);
+        omc = pool.getConnection(outboundMessage);
         Assert.assertSame(State.NOT_READY, omc.getState());
         Assert.assertFalse(omc.connect());
     }
@@ -292,7 +305,10 @@ public class OutboundMessagingConnectionTest
     {
         int count = 32;
         for (int i = 0; i < count; i++)
-            omc.addToBacklog(new QueuedMessage(new MessageOut<>(ECHO), i));
+        {
+            Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(LOCAL_ADDR.getAddress(), EmptyPayload.instance);
+            omc.addToBacklog(new QueuedMessage(outboundMessage, i));
+        }
         Assert.assertEquals(count, omc.backlogSize());
         Assert.assertEquals(count, omc.getPendingMessages().intValue());
 
@@ -361,7 +377,7 @@ public class OutboundMessagingConnectionTest
     public void finishHandshake_GOOD()
     {
         ChannelWriter channelWriter = ChannelWriter.create(channel, omc::handleMessageResult, Optional.empty());
-        HandshakeResult result = HandshakeResult.success(channelWriter, MESSAGING_VERSION);
+        HandshakeResult result = HandshakeResult.success(channelWriter, CURRENT_VERSION);
         ScheduledFuture<?> connectionTimeoutFuture = new TestScheduledFuture();
         Assert.assertFalse(connectionTimeoutFuture.isCancelled());
 
@@ -371,7 +387,7 @@ public class OutboundMessagingConnectionTest
         Assert.assertFalse(channelWriter.isClosed());
         Assert.assertEquals(channelWriter, omc.getChannelWriter());
         Assert.assertEquals(READY, omc.getState());
-        Assert.assertEquals(MESSAGING_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
+        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
         Assert.assertNull(omc.getConnectionTimeoutFuture());
         Assert.assertTrue(connectionTimeoutFuture.isCancelled());
     }
@@ -380,7 +396,7 @@ public class OutboundMessagingConnectionTest
     public void finishHandshake_GOOD_ButClosed()
     {
         ChannelWriter channelWriter = ChannelWriter.create(channel, omc::handleMessageResult, Optional.empty());
-        HandshakeResult result = HandshakeResult.success(channelWriter, MESSAGING_VERSION);
+        HandshakeResult result = HandshakeResult.success(channelWriter, CURRENT_VERSION);
         ScheduledFuture<?> connectionTimeoutFuture = new TestScheduledFuture();
         Assert.assertFalse(connectionTimeoutFuture.isCancelled());
 
@@ -391,7 +407,7 @@ public class OutboundMessagingConnectionTest
         Assert.assertTrue(channelWriter.isClosed());
         Assert.assertNull(omc.getChannelWriter());
         Assert.assertEquals(CLOSED, omc.getState());
-        Assert.assertEquals(MESSAGING_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
+        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
         Assert.assertNull(omc.getConnectionTimeoutFuture());
         Assert.assertTrue(connectionTimeoutFuture.isCancelled());
     }
@@ -401,14 +417,17 @@ public class OutboundMessagingConnectionTest
     {
         int count = 32;
         for (int i = 0; i < count; i++)
-            omc.addToBacklog(new QueuedMessage(new MessageOut<>(ECHO), i));
+        {
+            Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(LOCAL_ADDR.getAddress(), EmptyPayload.instance);
+            omc.addToBacklog(new QueuedMessage(outboundMessage, i));
+        }
         Assert.assertEquals(count, omc.backlogSize());
 
-        HandshakeResult result = HandshakeResult.disconnect(MESSAGING_VERSION);
+        HandshakeResult result = HandshakeResult.disconnect(CURRENT_VERSION);
         omc.finishHandshake(result);
         Assert.assertNotNull(omc.getChannelWriter());
         Assert.assertEquals(CREATING_CHANNEL, omc.getState());
-        Assert.assertEquals(MESSAGING_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
+        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
         Assert.assertEquals(count, omc.backlogSize());
     }
 
@@ -417,13 +436,16 @@ public class OutboundMessagingConnectionTest
     {
         int count = 32;
         for (int i = 0; i < count; i++)
-            omc.addToBacklog(new QueuedMessage(new MessageOut<>(ECHO), i));
+        {
+            Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(LOCAL_ADDR.getAddress(), EmptyPayload.instance);
+            omc.addToBacklog(new QueuedMessage(outboundMessage, i));
+        }
         Assert.assertEquals(count, omc.backlogSize());
 
         HandshakeResult result = HandshakeResult.failed();
         omc.finishHandshake(result);
         Assert.assertEquals(NOT_READY, omc.getState());
-        Assert.assertEquals(MESSAGING_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
+        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
         Assert.assertEquals(0, omc.backlogSize());
     }
 

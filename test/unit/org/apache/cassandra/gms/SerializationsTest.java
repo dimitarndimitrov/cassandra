@@ -55,7 +55,7 @@ public class SerializationsTest extends AbstractSerializationsTester
         VersionedValue.serializer.serialize(Statics.vv1, out);
         out.close();
 
-        // test serializedSize
+        // test getSerializedSize
         testSerializedSize(Statics.HeartbeatSt, HeartBeatState.serializer);
         testSerializedSize(Statics.EndpointSt, EndpointState.serializer);
         testSerializedSize(Statics.vv0, VersionedValue.serializer);
@@ -95,7 +95,7 @@ public class SerializationsTest extends AbstractSerializationsTester
         GossipDigestSyn.serializer.serialize(syn, out);
         out.close();
 
-        // test serializedSize
+        // test getSerializedSize
         for (GossipDigest gd : Statics.Digests)
             testSerializedSize(gd, GossipDigest.serializer);
         testSerializedSize(ack, GossipDigestAck.serializer);

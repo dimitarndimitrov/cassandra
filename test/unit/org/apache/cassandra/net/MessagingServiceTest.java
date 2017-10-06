@@ -40,6 +40,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import com.codahale.metrics.Snapshot;
 import org.apache.cassandra.db.SystemKeyspace;
+import org.apache.cassandra.gms.GossipDigestAck;
 import org.apache.cassandra.metrics.Timer;
 import org.apache.cassandra.auth.IInternodeAuthenticator;
 import org.apache.cassandra.config.DatabaseDescriptor;
@@ -375,27 +376,31 @@ public class MessagingServiceTest
         DatabaseDescriptor.setInternodeAuthenticator(ALLOW_NOTHING_AUTHENTICATOR);
         InetAddress address = InetAddress.getByName("127.0.0.250");
 
-        //Should return null
-        assertNull(ms.getConnectionPool(address));
-        assertNull(ms.getConnection(address, new MessageOut(MessagingService.Verb.GOSSIP_DIGEST_ACK)));
+        // Raw types used, in order to facilitate creating a mock gossip ACK request. Consider creating such commonly
+        // available mock instance.
+        OneWayRequest<Object> gossipAck = Verbs.GOSSIP.ACK.newRequest(address, new Message.Data(new Object()));
+        assertFalse(ms.isConnected(address, gossipAck));
 
         //Should tolerate null
         ms.convict(address);
-        ms.sendOneWay(new MessageOut(MessagingService.Verb.GOSSIP_DIGEST_ACK), address);
+        ms.send(gossipAck);
     }
 
     @Test
     public void testOutboundTcpConnectionCleansUp() throws Exception
     {
         MessagingService ms = MessagingService.instance();
-        DatabaseDescriptor.setInternodeAuthenticator(ALLOW_NOTHING_AUTHENTICATOR);
-        InetAddress address = InetAddress.getByName("127.0.0.250");
-        OutboundTcpConnectionPool pool = new OutboundTcpConnectionPool(address, new MockBackPressureStrategy(null).newState(address));
-        ms.connectionManagers.put(address, pool);
-        pool.smallMessages.start();
-        pool.smallMessages.enqueue(new MessageOut(MessagingService.Verb.GOSSIP_DIGEST_ACK), 0);
-        pool.smallMessages.join();
-        assertFalse(ms.connectionManagers.containsKey(address));
+        InetSocketAddress local = new InetSocketAddress("127.0.0.1", 9876);
+        InetSocketAddress remote = new InetSocketAddress("127.0.0.2", 9876);
+        OutboundMessagingPool pool = new OutboundMessagingPool(remote,
+                                                               local,
+                                                               null,
+                                                               new MockBackPressureStrategy(null).newState(remote.getAddress()),
+                                                               ALLOW_NOTHING_AUTHENTICATOR);
+        ms.channelManagers.put(remote.getAddress(), pool);
+        OneWayRequest<Object> gossipAck = Verbs.GOSSIP.ACK.newRequest(remote.getAddress(), new Message.Data(new Object()));
+        pool.sendMessage(gossipAck, 0);
+        assertFalse(ms.channelManagers.containsKey(remote.getAddress()));
     }
 
 }

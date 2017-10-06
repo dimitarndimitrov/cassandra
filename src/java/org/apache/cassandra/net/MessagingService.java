@@ -25,25 +25,17 @@ import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.net.*;
-import java.nio.channels.AsynchronousCloseException;
-import java.nio.channels.ClosedChannelException;
-import java.nio.channels.ServerSocketChannel;
-import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
@@ -53,83 +45,43 @@ import org.cliffc.high_scale_lib.NonBlockingHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.netty.channel.ServerChannel;
-import org.apache.cassandra.concurrent.ExecutorLocal;
-import com.carrotsearch.hppc.IntObjectMap;
-import com.carrotsearch.hppc.IntObjectOpenHashMap;
 import io.netty.channel.Channel;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import org.apache.cassandra.auth.IInternodeAuthenticator;
-import org.apache.cassandra.batchlog.Batch;
 import org.apache.cassandra.concurrent.ExecutorLocals;
-import org.apache.cassandra.concurrent.LocalAwareExecutorService;
-import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.concurrent.StageManager;
-import org.apache.cassandra.concurrent.TPC;
 import org.apache.cassandra.concurrent.TracingAwareExecutor;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.monitoring.ApproximateTime;
 import org.apache.cassandra.db.ColumnFamilyStore;
-import org.apache.cassandra.db.ConsistencyLevel;
-import org.apache.cassandra.db.CounterMutation;
 import org.apache.cassandra.db.IMutation;
 import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.db.Mutation;
-import org.apache.cassandra.db.ReadCommand;
-import org.apache.cassandra.db.ReadResponse;
-import org.apache.cassandra.db.SnapshotCommand;
 import org.apache.cassandra.db.SystemKeyspace;
-import org.apache.cassandra.db.TruncateResponse;
-import org.apache.cassandra.db.Truncation;
-import org.apache.cassandra.db.WriteResponse;
+import org.apache.cassandra.db.monitoring.ApproximateTime;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.InternalRequestExecutionException;
-import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.exceptions.RequestFailureReason;
-import org.apache.cassandra.gms.EchoMessage;
-import org.apache.cassandra.gms.GossipDigestAck;
-import org.apache.cassandra.gms.GossipDigestAck2;
-import org.apache.cassandra.gms.GossipDigestSyn;
-import org.apache.cassandra.hints.HintMessage;
-import org.apache.cassandra.hints.HintResponse;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataInputPlus;
-import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.locator.IEndpointSnitch;
 import org.apache.cassandra.locator.ILatencySubscriber;
 import org.apache.cassandra.metrics.ConnectionMetrics;
 import org.apache.cassandra.metrics.DroppedMessageMetrics;
 import org.apache.cassandra.metrics.MessagingMetrics;
-import org.apache.cassandra.net.interceptors.Interceptor;
-import org.apache.cassandra.net.interceptors.Interceptors;
-import org.apache.cassandra.net.async.OutboundMessagingPool;
 import org.apache.cassandra.net.async.NettyFactory;
 import org.apache.cassandra.net.async.NettyFactory.InboundInitializer;
-import org.apache.cassandra.repair.messages.RepairMessage;
-import org.apache.cassandra.schema.MigrationManager;
+import org.apache.cassandra.net.async.OutboundMessagingPool;
+import org.apache.cassandra.net.interceptors.Interceptor;
+import org.apache.cassandra.net.interceptors.Interceptors;
 import org.apache.cassandra.schema.TableId;
-import org.apache.cassandra.security.SSLFactory;
-import org.apache.cassandra.service.*;
-import org.apache.cassandra.service.AbstractWriteResponseHandler;
-import org.apache.cassandra.service.StorageProxy;
+import org.apache.cassandra.service.ClientWarn;
 import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.service.paxos.Commit;
-import org.apache.cassandra.service.paxos.PrepareResponse;
 import org.apache.cassandra.tracing.TraceState;
 import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.utils.BooleanSerializer;
 import org.apache.cassandra.utils.ExpiringMap;
 import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.NativeLibrary;
 import org.apache.cassandra.utils.Pair;
-import org.apache.cassandra.utils.StatusLogger;
-import org.apache.cassandra.utils.UUIDSerializer;
 import org.apache.cassandra.utils.concurrent.SimpleCondition;
 
 public final class MessagingService implements MessagingServiceMBean
@@ -160,7 +112,7 @@ public final class MessagingService implements MessagingServiceMBean
     private final ExpiringMap<Integer, CallbackInfo<?>> callbacks;
 
     @VisibleForTesting
-    public final ConcurrentMap<InetAddress, OutboundMessagingPool> channelManagers = new NonBlockingHashMap<>();
+    final ConcurrentMap<InetAddress, OutboundMessagingPool> channelManagers = new NonBlockingHashMap<>();
     final List<ServerChannel> serverChannels = Lists.newArrayList();
 
     private final SimpleCondition listenGate;
@@ -441,7 +393,11 @@ public final class MessagingService implements MessagingServiceMBean
         if (logger.isTraceEnabled())
             logger.trace("Sending {}", message);
 
-        return getConnection(message).thenAccept(cp -> cp.enqueue(message));
+        // TODO Refactor getMessagingConnection to return CompletableFuture and change its usages accordingly.
+//        OutboundMessagingPool outboundMessagingPool = getMessagingConnection(message.to());
+//        if (outboundMessagingPool != null)
+//            outboundMessagingPool.sendMessage(message, message.id());
+        return getMessagingConnection(message.to()).thenAccept(mc -> mc.sendMessage(message, message.id()));
     }
 
     private <P, Q, M extends Request<P, Q>> void deliverLocallyInternal(M request,
@@ -462,12 +418,13 @@ public final class MessagingService implements MessagingServiceMBean
     {
         if (request.verb().supportsBackPressure() && DatabaseDescriptor.backPressureEnabled())
         {
-            return getConnectionPool(request.to()).thenAccept(cp -> {
-                if (cp != null)
+            return getMessagingConnection(request.to()).thenAccept(mc -> {
+                if (mc != null)
                 {
-                    BackPressureState backPressureState = getBackPressureState(host);
-                    if (backPressureState != null)
-                        backPressureState.onRequestSent(request);
+                    BackPressureState backPressureState = mc.getBackPressureState();
+                    if (backPressureState == null)
+                        return;
+                    backPressureState.onRequestSent(request);
                 }
             });
         }
@@ -486,14 +443,17 @@ public final class MessagingService implements MessagingServiceMBean
     {
         if (verb.supportsBackPressure() && DatabaseDescriptor.backPressureEnabled())
         {
-            return getConnectionPool(host).thenAccept(cp -> {
-                BackPressureState backPressureState = getBackPressureState(host);
-                if (backPressureState == null)
-                    return;
-                if (!timeout)
-                    backPressureState.onResponseReceived();
-                else
-                    backPressureState.onResponseTimeout();
+            return getMessagingConnection(host).thenAccept(mc -> {
+                if (mc != null)
+                {
+                    BackPressureState backPressureState = mc.getBackPressureState();
+                    if (backPressureState == null)
+                        return;
+                    if (!timeout)
+                        backPressureState.onResponseReceived();
+                    else
+                        backPressureState.onResponseTimeout();
+                }
             });
         }
 
@@ -521,9 +481,9 @@ public final class MessagingService implements MessagingServiceMBean
                 if (host.equals(FBUtilities.getBroadcastAddress()))
                     continue;
 
-                CompletableFuture<Void> next = getMessagingConnection(host).thenAccept(pool -> {
-                    if (pool != null)
-                        states.add(pool.getBackPressureState());
+                CompletableFuture<Void> next = getMessagingConnection(host).thenAccept(mc -> {
+                    if (mc != null)
+                        states.add(mc.getBackPressureState());
                 });
 
                 if (future == null)
@@ -539,12 +499,6 @@ public final class MessagingService implements MessagingServiceMBean
         }
 
         return CompletableFuture.completedFuture(null);
-    }
-
-    BackPressureState getBackPressureState(InetAddress host)
-    {
-        OutboundMessagingPool messagingConnection = getMessagingConnection(host);
-        return messagingConnection != null ? messagingConnection.getBackPressureState() : null;
     }
 
     void markTimeout(InetAddress addr)
@@ -570,19 +524,14 @@ public final class MessagingService implements MessagingServiceMBean
     /**
      * called from gossiper when it notices a node is not responding.
      */
-    public CompletableFuture<Void> convict(InetAddress ep)
+    public CompletableFuture<Void> convict(InetAddress address)
     {
-        return getConnectionPool(ep).thenAccept(cp -> {
-            if (cp != null)
-            {
-                logger.trace("Resetting pool for {}", ep);
-                reset(ep);
-            }
-            else
-            {
-                logger.debug("Not resetting pool for {} because internode authenticator said not to connect", ep);
-            }
-        });
+        OutboundMessagingPool messagingPool = channelManagers.remove(address);
+        if (messagingPool != null)
+        {
+            return CompletableFuture.runAsync(() -> { messagingPool.close(false); });
+        }
+        return CompletableFuture.completedFuture(null);
     }
 
     public void listen()
@@ -715,15 +664,18 @@ public final class MessagingService implements MessagingServiceMBean
             messagingPool.close(false);
     }
 
+    // TODO Figure out if this should be made async as well
     public InetAddress getCurrentEndpoint(InetAddress publicAddress)
     {
-        OutboundMessagingPool messagingPool = getMessagingConnection(publicAddress);
-        return messagingPool != null ? messagingPool.getPreferredRemoteAddr().getAddress() : null;
-    }
-
-    public CompletableFuture<OutboundTcpConnection> getConnection(Message msg)
-    {
-        return getConnectionPool(msg.to()).thenApply(cp -> cp == null ? null : cp.getConnection(msg));
+        try
+        {
+            OutboundMessagingPool messagingPool = getMessagingConnection(publicAddress).get();
+            return messagingPool != null ? messagingPool.getPreferredRemoteAddr().getAddress() : null;
+        }
+        catch (InterruptedException | ExecutionException e)
+        {
+            return null;
+        }
     }
 
     public void register(ILatencySubscriber subcriber)
@@ -1081,31 +1033,55 @@ public final class MessagingService implements MessagingServiceMBean
                                                    bounds.left.getPartitioner().getClass().getName()));
     }
 
-    private OutboundMessagingPool getMessagingConnection(InetAddress to)
+    CompletableFuture<OutboundMessagingPool> getMessagingConnection(InetAddress to)
     {
-        OutboundMessagingPool pool = channelManagers.get(to);
-        if (pool == null)
+        OutboundMessagingPool existingPool = channelManagers.get(to);
+        if (existingPool != null)
         {
-            final boolean secure = isEncryptedConnection(to);
-            final int port = portFor(secure);
-            if (!DatabaseDescriptor.getInternodeAuthenticator().authenticate(to, port))
-                return null;
-
-            InetSocketAddress preferredRemote = new InetSocketAddress(SystemKeyspace.getPreferredIP(to), port);
-            InetSocketAddress local = new InetSocketAddress(FBUtilities.getLocalAddress(), 0);
-            ServerEncryptionOptions encryptionOptions = secure ? DatabaseDescriptor.getServerEncryptionOptions() : null;
-            IInternodeAuthenticator authenticator = DatabaseDescriptor.getInternodeAuthenticator();
-
-            pool = new OutboundMessagingPool(preferredRemote, local, encryptionOptions, backPressure.newState(to), authenticator);
-            OutboundMessagingPool existing = channelManagers.putIfAbsent(to, pool);
-            if (existing != null)
-            {
-                pool.close(false);
-                pool = existing;
-            }
+            return CompletableFuture.completedFuture(existingPool);
         }
-        return pool;
+
+        final boolean secure = isEncryptedConnection(to);
+        final int port = portFor(secure);
+        if (!DatabaseDescriptor.getInternodeAuthenticator().authenticate(to, port))
+            return CompletableFuture.completedFuture(null);
+
+        return CompletableFuture.supplyAsync(() ->
+                                             {
+                                                 InetSocketAddress preferredRemote = new InetSocketAddress(SystemKeyspace.getPreferredIP(to), port);
+                                                 InetSocketAddress local = new InetSocketAddress(FBUtilities.getLocalAddress(), 0);
+                                                 ServerEncryptionOptions encryptionOptions = secure ? DatabaseDescriptor.getServerEncryptionOptions() : null;
+                                                 IInternodeAuthenticator authenticator = DatabaseDescriptor.getInternodeAuthenticator();
+
+                                                 OutboundMessagingPool pool = new OutboundMessagingPool(preferredRemote,
+                                                                                                        local,
+                                                                                                        encryptionOptions,
+                                                                                                        backPressure.newState(to),
+                                                                                                        authenticator);
+                                                 OutboundMessagingPool existing = channelManagers.putIfAbsent(to, pool);
+                                                 if (existing != null)
+                                                 {
+                                                     pool.close(false);
+                                                     pool = existing;
+                                                 }
+                                                 return pool;
+                                             });
+
     }
+
+    BackPressureState getBackPressureState(InetAddress host)
+     {
+         OutboundMessagingPool messagingPool = null;
+         try
+         {
+             messagingPool = getMessagingConnection(host).get();
+         }
+         catch (InterruptedException | ExecutionException e)
+         {
+             return null;
+         }
+         return messagingPool != null ? messagingPool.getBackPressureState() : null;
+     }
 
     public static int portFor(InetAddress addr)
     {
@@ -1119,12 +1095,12 @@ public final class MessagingService implements MessagingServiceMBean
     }
 
     @VisibleForTesting
-    boolean isConnected(InetAddress address, MessageOut messageOut)
+    boolean isConnected(InetAddress address, Message<?> message)
     {
         OutboundMessagingPool pool = channelManagers.get(address);
         if (pool == null)
             return false;
-        return pool.getConnection(messageOut).isConnected();
+        return pool.getConnection(message).isConnected();
     }
 
     public static boolean isEncryptedConnection(InetAddress address)

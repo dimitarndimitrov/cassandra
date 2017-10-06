@@ -38,6 +38,7 @@ import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.Future;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.async.HandshakeProtocol.FirstHandshakeMessage;
 import org.apache.cassandra.net.async.HandshakeProtocol.SecondHandshakeMessage;
 import org.apache.cassandra.net.async.HandshakeProtocol.ThirdHandshakeMessage;
@@ -63,7 +64,7 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
 
     /**
      * The number of milliseconds to wait before closing a channel if there has been no progress (when there is
-     * data to be sent).See {@link IdleStateHandler} and {@link MessageOutHandler#userEventTriggered(ChannelHandlerContext, Object)}.
+     * data to be sent).See {@link IdleStateHandler} and {@link OutboundMessageHandler#userEventTriggered(ChannelHandlerContext, Object)}.
      */
     private static final long DEFAULT_WRITE_IDLE_MS = TimeUnit.SECONDS.toMillis(10);
     private static final String WRITE_IDLE_PROPERTY = PROPERTY_PREFIX + "outbound_write_idle_ms";
@@ -72,9 +73,9 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
     private final OutboundConnectionIdentifier connectionId;
 
     /**
-     * The expected messaging service version to use.
+     * The expected protocl version to use.
      */
-    private final int messagingVersion;
+    private final ProtocolVersion version;
 
     /**
      * A function to invoke upon completion of the attempt, success or failure, to connect to the peer.
@@ -87,7 +88,7 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
     {
         this.params = params;
         this.connectionId = params.connectionId;
-        this.messagingVersion = params.protocolVersion;
+        this.version = params.protocolVersion;
         this.callback = params.callback;
         this.mode = params.mode;
     }
@@ -100,7 +101,7 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
     @Override
     public void channelActive(final ChannelHandlerContext ctx) throws Exception
     {
-        FirstHandshakeMessage msg = new FirstHandshakeMessage(messagingVersion, mode, params.compress);
+        FirstHandshakeMessage msg = new FirstHandshakeMessage(version, mode, params.compress);
         logger.trace("starting handshake with peer {}, msg = {}", connectionId.connectionAddress(), msg);
         ctx.writeAndFlush(msg.encode(ctx.alloc())).addListener(future -> firstHandshakeMessageListener(future, ctx));
         ctx.fireChannelActive();
@@ -137,16 +138,16 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
             return;
 
         logger.trace("received second handshake message from peer {}, msg = {}", connectionId.connectionAddress(), msg);
-        final int peerMessagingVersion = msg.messagingVersion;
+        final ProtocolVersion peerProtocolVersion = msg.version;
 
         // we expected a higher protocol version, but it was actually lower
-        if (messagingVersion > peerMessagingVersion)
+        if (version.compareTo(peerProtocolVersion) > 0)
         {
-            logger.trace("peer's max version is {}; will reconnect with that version", peerMessagingVersion);
+            logger.trace("peer's max version is {}; will reconnect with that version", peerProtocolVersion.handshakeVersion);
             try
             {
                 if (DatabaseDescriptor.getSeeds().contains(connectionId.remote()))
-                    logger.warn("Seed gossip version is {}; will not connect with that version", peerMessagingVersion);
+                    logger.warn("Seed gossip version is {}; will not connect with that version", peerProtocolVersion.handshakeVersion);
             }
             catch (Throwable e)
             {
@@ -156,23 +157,25 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
                 logger.warn("failed to reread yaml (on trying to connect to a seed): {}", e.getLocalizedMessage());
             }
             ctx.close();
-            callback.accept(HandshakeResult.disconnect(peerMessagingVersion));
+            callback.accept(HandshakeResult.disconnect(peerProtocolVersion));
             return;
         }
         // we anticipate a version that is lower than what peer is actually running
-        else if (messagingVersion < peerMessagingVersion && messagingVersion < MessagingService.current_version)
+        else if (version.compareTo(peerProtocolVersion) < 0 && version.compareTo(MessagingService.current_version.protocolVersion()) < 0)
         {
-            logger.trace("peer has a higher max version than expected {} (previous value {})", peerMessagingVersion, messagingVersion);
+            logger.trace("peer has a higher max version than expected {} (previous value {})",
+                         peerProtocolVersion.handshakeVersion,
+                         version.handshakeVersion);
             ctx.close();
-            callback.accept(HandshakeResult.disconnect(peerMessagingVersion));
+            callback.accept(HandshakeResult.disconnect(peerProtocolVersion));
             return;
         }
 
         try
         {
-            ctx.writeAndFlush(new ThirdHandshakeMessage(MessagingService.current_version, connectionId.local()).encode(ctx.alloc()));
-            ChannelWriter channelWriter = setupPipeline(ctx.channel(), peerMessagingVersion);
-            callback.accept(HandshakeResult.success(channelWriter, peerMessagingVersion));
+            ctx.writeAndFlush(new ThirdHandshakeMessage(MessagingService.current_version.protocolVersion(), connectionId.local()).encode(ctx.alloc()));
+            ChannelWriter channelWriter = setupPipeline(ctx.channel(), peerProtocolVersion);
+            callback.accept(HandshakeResult.success(channelWriter, peerProtocolVersion));
         }
         catch (Exception e)
         {
@@ -183,15 +186,15 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
     }
 
     @VisibleForTesting
-    ChannelWriter setupPipeline(Channel channel, int messagingVersion)
+    ChannelWriter setupPipeline(Channel channel, ProtocolVersion protocolVersion)
     {
         ChannelPipeline pipeline = channel.pipeline();
         pipeline.addLast("idleWriteHandler", new IdleStateHandler(true, 0, WRITE_IDLE_MS, 0, TimeUnit.MILLISECONDS));
         if (params.compress)
-            pipeline.addLast(NettyFactory.OUTBOUND_COMPRESSOR_HANDLER_NAME, NettyFactory.createLz4Encoder(messagingVersion));
+            pipeline.addLast(NettyFactory.OUTBOUND_COMPRESSOR_HANDLER_NAME, NettyFactory.createLz4Encoder(protocolVersion));
 
         ChannelWriter channelWriter = ChannelWriter.create(channel, params.messageResultConsumer, params.coalescingStrategy);
-        pipeline.addLast("messageOutHandler", new MessageOutHandler(connectionId, messagingVersion, channelWriter, params.backlogSupplier));
+        pipeline.addLast("messageOutHandler", new OutboundMessageHandler(connectionId, protocolVersion, channelWriter, params.backlogSupplier));
         pipeline.remove(this);
         return channelWriter;
     }
@@ -212,8 +215,6 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
      */
     public static class HandshakeResult
     {
-        static final int UNKNOWN_PROTOCOL_VERSION = -1;
-
         /**
          * Describes the result of receiving the response back from the peer (Message 2 of the handshake)
          * and implies an action that should be taken.
@@ -226,30 +227,30 @@ public class OutboundHandshakeHandler extends ByteToMessageDecoder
         /** The channel for the connection, only set for successful handshake. */
         final ChannelWriter channelWriter;
         /** The version negotiated with the peer. Set unless this is a {@link Outcome#NEGOTIATION_FAILURE}. */
-        final int negotiatedMessagingVersion;
+        final ProtocolVersion negotiatedProtocolVersion;
         /** The handshake {@link Outcome}. */
         final Outcome outcome;
 
-        private HandshakeResult(ChannelWriter channelWriter, int negotiatedMessagingVersion, Outcome outcome)
+        private HandshakeResult(ChannelWriter channelWriter, ProtocolVersion negotiatedProtocolVersion, Outcome outcome)
         {
             this.channelWriter = channelWriter;
-            this.negotiatedMessagingVersion = negotiatedMessagingVersion;
+            this.negotiatedProtocolVersion = negotiatedProtocolVersion;
             this.outcome = outcome;
         }
 
-        static HandshakeResult success(ChannelWriter channel, int negotiatedMessagingVersion)
+        static HandshakeResult success(ChannelWriter channel, ProtocolVersion negotiatedProtocolVersion)
         {
-            return new HandshakeResult(channel, negotiatedMessagingVersion, Outcome.SUCCESS);
+            return new HandshakeResult(channel, negotiatedProtocolVersion, Outcome.SUCCESS);
         }
 
-        static HandshakeResult disconnect(int negotiatedMessagingVersion)
+        static HandshakeResult disconnect(ProtocolVersion negotiatedProtocolVersion)
         {
-            return new HandshakeResult(null, negotiatedMessagingVersion, Outcome.DISCONNECT);
+            return new HandshakeResult(null, negotiatedProtocolVersion, Outcome.DISCONNECT);
         }
 
         static HandshakeResult failed()
         {
-            return new HandshakeResult(null, UNKNOWN_PROTOCOL_VERSION, Outcome.NEGOTIATION_FAILURE);
+            return new HandshakeResult(null, null, Outcome.NEGOTIATION_FAILURE);
         }
     }
 }

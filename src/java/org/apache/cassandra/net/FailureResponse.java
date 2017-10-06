@@ -81,7 +81,7 @@ public class FailureResponse<Q> extends Response<Q>
     }
 
     @Override
-    long payloadSerializedSize(MessagingVersion version)
+    protected long payloadSerializedSize(MessagingVersion version)
     {
         return 0;
     }

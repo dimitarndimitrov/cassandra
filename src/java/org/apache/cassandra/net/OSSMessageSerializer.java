@@ -48,74 +48,14 @@ import org.apache.cassandra.utils.Serializer;
 import org.apache.cassandra.utils.TimeoutSupplier;
 import org.apache.cassandra.utils.UUIDGen;
 
-import static org.apache.cassandra.net.Verbs.*;
-
 /**
  * Inter-node protocol serializer for the OSS protocol (that is, the protocol we'll default to if we talk to some pure OSS
  * nodes).
  */
 public class OSSMessageSerializer implements Message.Serializer
 {
-    private enum OSSVerb
-    {
-        MUTATION(WRITES.WRITE),
-        HINT(HINTS.HINT),
-        READ_REPAIR(WRITES.READ_REPAIR),
-        READ(READS.SINGLE_READ),
-        REQUEST_RESPONSE(null),
-        BATCH_STORE(WRITES.BATCH_STORE),
-        BATCH_REMOVE(WRITES.BATCH_REMOVE),
-        @Deprecated STREAM_REPLY(null),
-        @Deprecated STREAM_REQUEST(null),
-        RANGE_SLICE(READS.RANGE_READ),
-        @Deprecated BOOTSTRAP_TOKEN(null),
-        @Deprecated TREE_REQUEST(null),
-        @Deprecated TREE_RESPONSE(null),
-        @Deprecated JOIN(null),
-        GOSSIP_DIGEST_SYN(GOSSIP.SYN),
-        GOSSIP_DIGEST_ACK(GOSSIP.ACK),
-        GOSSIP_DIGEST_ACK2(GOSSIP.ACK2),
-        @Deprecated DEFINITIONS_ANNOUNCE(null),
-        DEFINITIONS_UPDATE(SCHEMA.PUSH),
-        TRUNCATE(OPERATIONS.TRUNCATE),
-        SCHEMA_CHECK(SCHEMA.VERSION),
-        @Deprecated INDEX_SCAN(null),
-        REPLICATION_FINISHED(OPERATIONS.REPLICATION_FINISHED),
-        INTERNAL_RESPONSE(null), // responses to internal calls
-        COUNTER_MUTATION(WRITES.COUNTER_FORWARDING),
-        @Deprecated STREAMING_REPAIR_REQUEST(null),
-        @Deprecated STREAMING_REPAIR_RESPONSE(null),
-        SNAPSHOT(OPERATIONS.SNAPSHOT),
-        MIGRATION_REQUEST(SCHEMA.PULL),
-        GOSSIP_SHUTDOWN(GOSSIP.SHUTDOWN),
-        _TRACE(null),
-        ECHO(GOSSIP.ECHO),
-        REPAIR_MESSAGE(null),
-        PAXOS_PREPARE(LWT.PREPARE),
-        PAXOS_PROPOSE(LWT.PROPOSE),
-        PAXOS_COMMIT(LWT.COMMIT),
-        @Deprecated PAGED_RANGE(null),
-        UNUSED_1(null),
-        UNUSED_2(null),
-        UNUSED_3(null),
-        UNUSED_4(null),
-        UNUSED_5(null);
 
-        /**
-         * The corresponding definition for the verb if there is one. Verbs that have no such definition are:
-         *   - Deprecated verbs (and _TRACE): we won't ever receive them and only have them in the enum so ordinal() returns the right answer.
-         *   - REQUEST_RESPONSE and INTERNAL_RESPONSE: previous used for all responses so correspond to any number of definitions.
-         *   - REPAIR_MESSAGE: we've split all repair messages into sub-definitions so we need some specific handling.
-         */
-        private final Verb<?, ?> verb;
-
-        OSSVerb(Verb<?, ?> verb)
-        {
-            this.verb = verb;
-        }
-    }
-
-    private static final OSSVerb[] LEGACY_VERB_VALUES = OSSVerb.values();
+    // TODO Find a more elegant approach to make this available for testing from other packages.
 
     /**
      * Gets the verb corresponding to a particular _request_ definition.
@@ -126,8 +66,9 @@ public class OSSMessageSerializer implements Message.Serializer
         ImmutableMap.Builder<Verb<?, ?>, OSSVerb> builder = ImmutableMap.builder();
         for (OSSVerb ossVerb : OSSVerb.values())
         {
-            if (ossVerb.verb != null)
-                builder.put(ossVerb.verb, ossVerb);
+            Verb<?, ?> definition = ossVerb.getDefinition();
+            if (definition != null)
+                builder.put(definition, ossVerb);
         }
 
         for (Verb<?, ?> msg : Verbs.REPAIR)
@@ -361,15 +302,22 @@ public class OSSMessageSerializer implements Message.Serializer
     public Message deserialize(DataInputPlus in, InetAddress from) throws IOException
     {
         MessagingService.validateMagic(in.readInt());
+        OSSMessageHeader.Builder builder = new OSSMessageHeader.Builder(version);
         int id = in.readInt();
-        long timestamp = deserializeTimestampPre40(in, from);
+        builder.setMessageId(id);
+        int timestampLoBits = in.readInt();
+        //long timestamp = deserializeTimestampPre40(timestampLoBits, from);
+        builder.setTimestampLoBits(timestampLoBits);
 
         // From: it's serialized, but not really used since we know which node is talking to us.
         CompactEndpointSerializationHelper.deserialize(in);
+        builder.setFrom(from);
 
-        OSSVerb ossVerb = LEGACY_VERB_VALUES[in.readInt()];
+        OSSVerb ossVerb = OSSVerb.getVerbById(in.readInt());
+        builder.setVerb(ossVerb);
 
         int parameterCount = in.readInt();
+        builder.setParameterCount(parameterCount);
         // Creating an immutable map as we'll remove some below.
         Map<String, byte[]> rawParameters = new HashMap<>();
         for (int i = 0; i < parameterCount; i++)
@@ -379,20 +327,36 @@ public class OSSMessageSerializer implements Message.Serializer
             in.readFully(value);
             rawParameters.put(key, value);
         }
+        builder.setParameters(rawParameters);
 
-        Tracing.SessionInfo tracingInfo = extractAndRemoveTracingInfo(rawParameters);
+        //Tracing.SessionInfo tracingInfo = extractAndRemoveTracingInfo(rawParameters);
 
         int payloadSize = in.readInt();
+        builder.setPayloadSize(payloadSize);
 
-        boolean isResponse = ossVerb == OSSVerb.INTERNAL_RESPONSE || ossVerb == OSSVerb.REQUEST_RESPONSE;
+        return deserializePayload(in, builder.build());
+    }
+
+    public <P> Message<P> deserializePayload(DataInputPlus in, Message.Header header) throws IOException
+    {
+        if (!(header instanceof OSSMessageHeader))
+        {
+            throw new IllegalArgumentException();
+        }
+        OSSMessageHeader ossHeader = (OSSMessageHeader) header;
+        Map<String, byte[]> rawParameters = new HashMap<>(ossHeader.parameters);
+        long timestamp = deserializeTimestampPre40(ossHeader.timestampLoBits, ossHeader.from);
+        Tracing.SessionInfo tracingInfo = extractAndRemoveTracingInfo(rawParameters);
+
+        boolean isResponse = ossHeader.verb == OSSVerb.INTERNAL_RESPONSE || ossHeader.verb == OSSVerb.REQUEST_RESPONSE;
         if (isResponse)
         {
             // We unfortunately have to consult the callback to check what serializer to use
-            CallbackInfo<?> info = MessagingService.instance().getRegisteredCallback(id, false, from);
+            CallbackInfo<?> info = MessagingService.instance().getRegisteredCallback(ossHeader.messageId, false, ossHeader.from);
             if (info == null)
             {
                 // reply for expired callback.  we'll have to skip it.
-                in.skipBytesFully(payloadSize);
+                in.skipBytesFully(ossHeader.payloadSize);
                 return null;
             }
 
@@ -416,14 +380,14 @@ public class OSSMessageSerializer implements Message.Serializer
 
                 Message.Data data = new Message.Data(null,
                                                      -1,
-                                                     timestamp,
+                                                     ossHeader.timestampLoBits,
                                                      timeoutMillis,
                                                      MessageParameters.from(rawParameters),
                                                      tracingInfo);
 
-                return new FailureResponse(from,
+                return new FailureResponse(ossHeader.from,
                                            FBUtilities.getBroadcastAddress(),
-                                           id,
+                                           ossHeader.messageId,
                                            verb,
                                            reason,
                                            data);
@@ -432,15 +396,15 @@ public class OSSMessageSerializer implements Message.Serializer
             Object payload = version.serializer(verb).responseSerializer.deserialize(in);
 
             Message.Data data = new Message.Data(payload,
-                                                 payloadSize,
+                                                 ossHeader.payloadSize,
                                                  timestamp,
                                                  timeoutMillis,
                                                  MessageParameters.from(rawParameters),
                                                  tracingInfo);
 
-            return new Response(from,
+            return new Response(ossHeader.from,
                                 FBUtilities.getBroadcastAddress(),
-                                id,
+                                ossHeader.messageId,
                                 verb,
                                 data);
         }
@@ -449,10 +413,10 @@ public class OSSMessageSerializer implements Message.Serializer
             // Old code use to ask for when it wanted to know about errors, but we do this by default now so ignore
             rawParameters.remove(FAILURE_REASON_PARAM);
 
-            Verb<?, ?> verb = ossVerb == OSSVerb.REPAIR_MESSAGE
+            Verb<?, ?> verb = ossHeader.verb == OSSVerb.REPAIR_MESSAGE
                               ? repairVerbToLegacyCode.inverse().get((int)in.readByte())
-                              : ossVerb.verb;
-            assert verb != null : "Unknown definition for verb " + ossVerb;
+                              : ossHeader.verb.getDefinition();
+            assert verb != null : "Unknown definition for verb " + ossHeader.verb;
 
             Object payload = version.serializer(verb).requestSerializer.deserialize(in);
 
@@ -462,15 +426,15 @@ public class OSSMessageSerializer implements Message.Serializer
             {
                 InetAddress replyTo = InetAddress.getByAddress(rawParameters.remove(FORWARD_FROM));
                 Message.Data data = new Message.Data(payload,
-                                                     payloadSize,
+                                                     ossHeader.payloadSize,
                                                      timestamp,
                                                      timeoutMillis,
                                                      MessageParameters.from(rawParameters),
                                                      tracingInfo);
-                return new ForwardRequest(from,
+                return new ForwardRequest(ossHeader.from,
                                           FBUtilities.getBroadcastAddress(),
                                           replyTo,
-                                          id,
+                                          ossHeader.messageId,
                                           verb,
                                           data);
             }
@@ -478,15 +442,15 @@ public class OSSMessageSerializer implements Message.Serializer
             List<Request.Forward> forwards = extractAndRemoveForwards(rawParameters);
 
             Message.Data data = new Message.Data(payload,
-                                                 payloadSize,
+                                                 ossHeader.payloadSize,
                                                  timestamp,
                                                  timeoutMillis,
                                                  MessageParameters.from(rawParameters),
                                                  tracingInfo);
 
             return verb.isOneWay()
-                   ? new OneWayRequest<>(from, Request.local, (Verb.OneWay) verb, data, forwards)
-                   : new Request(from, Request.local, id, verb, data, forwards);
+                   ? new OneWayRequest<>(ossHeader.from, Request.local, (Verb.OneWay) verb, data, forwards)
+                   : new Request(ossHeader.from, Request.local, ossHeader.messageId, verb, data, forwards);
         }
     }
 
@@ -527,13 +491,12 @@ public class OSSMessageSerializer implements Message.Serializer
         }
     }
 
-    private long deserializeTimestampPre40(DataInputPlus in, InetAddress from) throws IOException
+    private long deserializeTimestampPre40(int timestampLoBits, InetAddress from) throws IOException
     {
         // Reconstruct the message construction time sent by the remote host (we sent only the lower 4 bytes, assuming the
         // higher 4 bytes wouldn't change between the sender and receiver)
-        int partial = in.readInt(); // make sure to readInt, even if cross_node_to is not enabled
         long currentTime = ApproximateTime.currentTimeMillis();
-        long sentConstructionTime = (currentTime & 0xFFFFFFFF00000000L) | (((partial & 0xFFFFFFFFL) << 2) >> 2);
+        long sentConstructionTime = (currentTime & 0xFFFFFFFF00000000L) | (((timestampLoBits & 0xFFFFFFFFL) << 2) >> 2);
 
         // Because nodes may not have their clock perfectly in sync, it's actually possible the sentConstructionTime is
         // later than the currentTime (the received time). If that's the case, as we definitively know there is a lack

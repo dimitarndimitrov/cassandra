@@ -38,9 +38,13 @@ import org.apache.cassandra.db.compaction.CompactionManager;
 import org.apache.cassandra.db.marshal.AsciiType;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.EmptyPayload;
+import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.ProtocolVersion;
+import org.apache.cassandra.net.Verbs;
 import org.apache.cassandra.schema.KeyspaceParams;
+import org.apache.cassandra.utils.FBUtilities;
 
 import static org.apache.cassandra.net.async.InboundHandshakeHandler.State.MESSAGING_HANDSHAKE_COMPLETE;
 import static org.apache.cassandra.net.async.OutboundMessagingConnection.State.READY;
@@ -52,7 +56,7 @@ public class HandshakeHandlersTest
 
     private static final InetSocketAddress LOCAL_ADDR = new InetSocketAddress("127.0.0.1", 9999);
     private static final InetSocketAddress REMOTE_ADDR = new InetSocketAddress("127.0.0.2", 9999);
-    private static final int MESSAGING_VERSION = MessagingService.current_version;
+    private static final ProtocolVersion MESSAGING_VERSION = MessagingService.current_version.protocolVersion();
     private static final OutboundConnectionIdentifier connectionId = OutboundConnectionIdentifier.small(LOCAL_ADDR, REMOTE_ADDR);
 
     @BeforeClass
@@ -77,7 +81,7 @@ public class HandshakeHandlersTest
                                                                   .connectionId(connectionId)
                                                                   .callback(imc::finishHandshake)
                                                                   .mode(NettyFactory.Mode.MESSAGING)
-                                                                  .protocolVersion(MessagingService.current_version)
+                                                                  .protocolVersion(MessagingService.current_version.protocolVersion())
                                                                   .coalescingStrategy(Optional.empty())
                                                                   .build();
         OutboundHandshakeHandler outboundHandshakeHandler = new OutboundHandshakeHandler(params);
@@ -127,6 +131,7 @@ public class HandshakeHandlersTest
         while (buf.remaining() > 0)
             buf.put(bytes);
 
+        Message<?> outboundRequest;
         // write a bunch of messages to the channel
         ColumnFamilyStore cfs1 = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1);
         int count = 1024;
@@ -139,12 +144,14 @@ public class HandshakeHandlersTest
                                     .add("val", buf)
                                     .build();
 
-                QueuedMessage msg = new QueuedMessage(mutation.createMessage(), i);
+                outboundRequest = Verbs.WRITES.WRITE.newRequest(FBUtilities.getBroadcastAddress(), mutation);
+                QueuedMessage msg = new QueuedMessage(outboundRequest, i);
                 outboundChannel.writeAndFlush(msg);
             }
             else
             {
-                outboundChannel.writeAndFlush(new QueuedMessage(new MessageOut<>(MessagingService.Verb.ECHO), i));
+                outboundRequest = Verbs.GOSSIP.ECHO.newRequest(REMOTE_ADDR.getAddress(), EmptyPayload.instance);
+                outboundChannel.writeAndFlush(new QueuedMessage(outboundRequest, i));
             }
         }
         outboundChannel.flush();
@@ -166,7 +173,7 @@ public class HandshakeHandlersTest
                                                                   .mode(NettyFactory.Mode.MESSAGING)
                                                                   .compress(compress)
                                                                   .coalescingStrategy(Optional.empty())
-                                                                  .protocolVersion(MessagingService.current_version)
+                                                                  .protocolVersion(MessagingService.current_version.protocolVersion())
                                                                   .build();
         OutboundHandshakeHandler outboundHandshakeHandler = new OutboundHandshakeHandler(params);
         EmbeddedChannel outboundChannel = new EmbeddedChannel(outboundHandshakeHandler);

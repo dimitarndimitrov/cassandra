@@ -303,4 +303,9 @@ class MessageSerializer implements Message.Serializer
             return new Response<>(from, Request.local, messageId, verb, data);
         }
     }
+
+    public <P> Message<P> deserializePayload(DataInputPlus in, Message.Header headerParams) throws IOException
+    {
+        throw new UnsupportedOperationException();
+    }
 }

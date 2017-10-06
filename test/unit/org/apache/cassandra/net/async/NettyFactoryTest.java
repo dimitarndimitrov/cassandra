@@ -238,7 +238,7 @@ public class NettyFactoryTest
         OutboundConnectionParams params = OutboundConnectionParams.builder()
                                                                   .connectionId(id)
                                                                   .coalescingStrategy(Optional.empty())
-                                                                  .protocolVersion(MessagingService.current_version)
+                                                                  .protocolVersion(MessagingService.current_version.protocolVersion())
                                                                   .build();
         return factory.createOutboundBootstrap(params);
     }
@@ -289,7 +289,7 @@ public class NettyFactoryTest
         OutboundConnectionParams params = OutboundConnectionParams.builder()
                                                                   .connectionId(id)
                                                                   .encryptionOptions(encOptions())
-                                                                  .protocolVersion(MessagingService.current_version)
+                                                                  .protocolVersion(MessagingService.current_version.protocolVersion())
                                                                   .build();
         OutboundInitializer outboundInitializer = new OutboundInitializer(params);
         NioSocketChannel channel = new NioSocketChannel();

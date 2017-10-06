@@ -81,7 +81,8 @@ public class DataOutputBuffer extends BufferedDataOutputStreamPlus
         this(ByteBuffer.allocate(size));
     }
 
-    protected DataOutputBuffer(ByteBuffer buffer)
+    // TODO Find a more elegant approach to make this available for testing from other packages.
+    public DataOutputBuffer(ByteBuffer buffer)
     {
         super(buffer);
     }

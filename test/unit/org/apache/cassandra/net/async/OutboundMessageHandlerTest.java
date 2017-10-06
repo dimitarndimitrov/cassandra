@@ -20,9 +20,8 @@ package org.apache.cassandra.net.async;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.util.HashMap;
+import java.net.UnknownHostException;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
@@ -31,7 +30,6 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import com.sun.org.apache.bcel.internal.generic.DDIV;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
@@ -41,21 +39,32 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.UnsupportedMessageTypeException;
 import io.netty.handler.timeout.IdleStateEvent;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataInputPlus;
-import org.apache.cassandra.io.util.DataOutputPlus;
-import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.EmptyPayload;
+import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.utils.UUIDGen;
+import org.apache.cassandra.net.ProtocolVersion;
+import org.apache.cassandra.net.Response;
+import org.apache.cassandra.net.Verbs;
+import org.jboss.byteman.contrib.bmunit.BMRule;
+import org.jboss.byteman.contrib.bmunit.BMRules;
 
-public class MessageOutHandlerTest
+public class OutboundMessageHandlerTest
 {
-    private static final int MESSAGING_VERSION = MessagingService.current_version;
+    // TODO Should all tests be duplicated - one instance going through the legacy (OSS) serialization path,
+    // and another going through the new serialization path, that came with the MessagingService refactoring?
+    private static final ProtocolVersion CURRENT_VERSION = MessagingService.current_version.protocolVersion();
+
+    private static final InetSocketAddress FROM = new InetSocketAddress("127.0.0.1", 0);
+    private static final InetSocketAddress TO = new InetSocketAddress("127.0.0.2", 0);
+
+    private static final Message<EmptyPayload> newDummyResponse()
+    {
+        return Response.testResponse(FROM.getAddress(), TO.getAddress(), Verbs.WRITES.WRITE, EmptyPayload.instance);
+    };
 
     private ChannelWriter channelWriter;
     private EmbeddedChannel channel;
-    private MessageOutHandler handler;
+    private OutboundMessageHandler handler;
 
     @BeforeClass
     public static void before()
@@ -67,35 +76,34 @@ public class MessageOutHandlerTest
     @Before
     public void setup()
     {
-        setup(MessageOutHandler.AUTO_FLUSH_THRESHOLD);
+        setup(OutboundMessageHandler.AUTO_FLUSH_THRESHOLD);
     }
 
     private void setup(int flushThreshold)
     {
-        OutboundConnectionIdentifier connectionId = OutboundConnectionIdentifier.small(new InetSocketAddress("127.0.0.1", 0),
-                                                                                       new InetSocketAddress("127.0.0.2", 0));
+        OutboundConnectionIdentifier connectionId = OutboundConnectionIdentifier.small(FROM, TO);
         OutboundMessagingConnection omc = new NonSendingOutboundMessagingConnection(connectionId, null, Optional.empty());
         channel = new EmbeddedChannel();
         channelWriter = ChannelWriter.create(channel, omc::handleMessageResult, Optional.empty());
-        handler = new MessageOutHandler(connectionId, MESSAGING_VERSION, channelWriter, () -> null, flushThreshold);
+        handler = new OutboundMessageHandler(connectionId, CURRENT_VERSION, channelWriter, () -> null, flushThreshold);
         channel.pipeline().addLast(handler);
     }
 
     @Test
-    public void write_NoFlush() throws ExecutionException, InterruptedException, TimeoutException
+    public void write_NoFlush() throws ExecutionException, InterruptedException, TimeoutException, UnknownHostException
     {
-        MessageOut message = new MessageOut(MessagingService.Verb.ECHO);
-        ChannelFuture future = channel.write(new QueuedMessage(message, 42));
+        Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(FROM.getAddress(), EmptyPayload.instance);
+        ChannelFuture future = channel.write(new QueuedMessage(outboundMessage, 42));
         Assert.assertTrue(!future.isDone());
         Assert.assertFalse(channel.releaseOutbound());
     }
 
     @Test
-    public void write_WithFlush() throws ExecutionException, InterruptedException, TimeoutException
+    public void write_WithFlush() throws ExecutionException, InterruptedException, TimeoutException, UnknownHostException
     {
         setup(1);
-        MessageOut message = new MessageOut(MessagingService.Verb.ECHO);
-        ChannelFuture future = channel.write(new QueuedMessage(message, 42));
+        Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(FROM.getAddress(), EmptyPayload.instance);
+        ChannelFuture future = channel.write(new QueuedMessage(outboundMessage, 42));
         Assert.assertTrue(future.isSuccess());
         Assert.assertTrue(channel.releaseOutbound());
     }
@@ -104,7 +112,8 @@ public class MessageOutHandlerTest
     public void serializeMessage() throws IOException
     {
         channelWriter.pendingMessageCount.set(1);
-        QueuedMessage msg = new QueuedMessage(new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE), 1);
+        Message<?> dummyResponse = newDummyResponse();
+        QueuedMessage msg = new QueuedMessage(dummyResponse, dummyResponse.id());
         ChannelFuture future = channel.writeAndFlush(msg);
 
         Assert.assertTrue(future.isSuccess());
@@ -126,7 +135,8 @@ public class MessageOutHandlerTest
     @Test
     public void unexpiredMessage()
     {
-        QueuedMessage msg = new QueuedMessage(new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE), 1);
+        Message<?> dummyResponse = newDummyResponse();
+        QueuedMessage msg = new QueuedMessage(dummyResponse, dummyResponse.id());
         ChannelPromise promise = new DefaultChannelPromise(channel);
         Assert.assertTrue(handler.isMessageValid(msg, promise));
 
@@ -137,7 +147,8 @@ public class MessageOutHandlerTest
     @Test
     public void expiredMessage()
     {
-        QueuedMessage msg = new QueuedMessage(new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE), 1, 0, true, true);
+        Message<?> dummyResponse = newDummyResponse();
+        QueuedMessage msg = new QueuedMessage(dummyResponse, dummyResponse.id(), 0, true);
         ChannelPromise promise = new DefaultChannelPromise(channel);
         Assert.assertFalse(handler.isMessageValid(msg, promise));
 
@@ -159,25 +170,14 @@ public class MessageOutHandlerTest
         write_BadMessageSize(Integer.MIN_VALUE + 10000);
     }
 
+    @BMRules(rules = { @BMRule(name = "Tweak serialized size",
+                               targetClass = "Message.Serializer",
+                               targetMethod = "getSerializedSize",
+                               action = "return $size;") } )
     private void write_BadMessageSize(long size)
     {
-        IVersionedSerializer<Object> serializer = new IVersionedSerializer<Object>()
-        {
-            public void serialize(Object o, DataOutputPlus out, int version)
-            {   }
-
-            public Object deserialize(DataInputPlus in, int version)
-            {
-                return null;
-            }
-
-            public long serializedSize(Object o, int version)
-            {
-                return size;
-            }
-        };
-        MessageOut message = new MessageOut(MessagingService.Verb.UNUSED_5, "payload", serializer);
-        ChannelFuture future = channel.write(new QueuedMessage(message, 42));
+        Message<?> dummyResponse = newDummyResponse();
+        ChannelFuture future = channel.write(new QueuedMessage(dummyResponse, dummyResponse.id()));
         Throwable t = future.cause();
         Assert.assertNotNull(t);
         Assert.assertSame(IllegalStateException.class, t.getClass());
@@ -186,57 +186,21 @@ public class MessageOutHandlerTest
     }
 
     @Test
+    @BMRules(rules = { @BMRule(name = "Force exception during serialization",
+                               targetClass = "Message.Serializer",
+                               targetMethod = "serialize",
+                               action = "throw new RuntimeException(\"this exception is part of the test - DON'T PANIC\")") } )
     public void writeForceExceptionPath()
     {
-        IVersionedSerializer<Object> serializer = new IVersionedSerializer<Object>()
-        {
-            public void serialize(Object o, DataOutputPlus out, int version)
-            {
-                throw new RuntimeException("this exception is part of the test - DON'T PANIC");
-            }
-
-            public Object deserialize(DataInputPlus in, int version)
-            {
-                return null;
-            }
-
-            public long serializedSize(Object o, int version)
-            {
-                return 42;
-            }
-        };
-        MessageOut message = new MessageOut(MessagingService.Verb.UNUSED_5, "payload", serializer);
-        ChannelFuture future = channel.write(new QueuedMessage(message, 42));
+        Message<?> dummyResponse = newDummyResponse();
+        ChannelFuture future = channel.write(new QueuedMessage(dummyResponse, dummyResponse.id()));
         Throwable t = future.cause();
         Assert.assertNotNull(t);
         Assert.assertFalse(channel.isOpen());
         Assert.assertFalse(channel.releaseOutbound());
     }
 
-    @Test
-    public void captureTracingInfo_ForceException()
-    {
-        MessageOut message = new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE)
-                             .withParameter(Tracing.TRACE_HEADER, new byte[9]);
-        handler.captureTracingInfo(new QueuedMessage(message, 42));
-    }
-
-    @Test
-    public void captureTracingInfo_UnknownSession()
-    {
-        UUID uuid = UUID.randomUUID();
-        MessageOut message = new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE)
-                             .withParameter(Tracing.TRACE_HEADER, UUIDGen.decompose(uuid));
-        handler.captureTracingInfo(new QueuedMessage(message, 42));
-    }
-
-    @Test
-    public void captureTracingInfo_KnownSession()
-    {
-        Tracing.instance.newSession(new HashMap<>());
-        MessageOut message = new MessageOut(MessagingService.Verb.REQUEST_RESPONSE);
-        handler.captureTracingInfo(new QueuedMessage(message, 42));
-    }
+    // TODO Figure out how (and if) tracing tests should be implemented.
 
     @Test
     public void userEventTriggered_RandomObject()
@@ -265,8 +229,8 @@ public class MessageOutHandlerTest
         ChannelUserEventSender sender = new ChannelUserEventSender();
         channel.pipeline().addFirst(sender);
 
-        MessageOut message = new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE);
-        channel.writeOutbound(new QueuedMessage(message, 42));
+        Message<?> dummyResponse = newDummyResponse();
+        channel.writeOutbound(new QueuedMessage(dummyResponse, dummyResponse.id()));
         sender.sendEvent(IdleStateEvent.WRITER_IDLE_STATE_EVENT);
         Assert.assertFalse(channel.isOpen());
     }

@@ -26,6 +26,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.async.HandshakeProtocol.FirstHandshakeMessage;
 import org.apache.cassandra.net.async.HandshakeProtocol.SecondHandshakeMessage;
 import org.apache.cassandra.net.async.HandshakeProtocol.ThirdHandshakeMessage;
@@ -35,6 +36,8 @@ import static org.junit.Assert.assertEquals;
 
 public class HandshakeProtocolTest
 {
+    private static final ProtocolVersion CURRENT_VERSION = MessagingService.current_version.protocolVersion();
+
     private ByteBuf buf;
 
     @BeforeClass
@@ -63,7 +66,7 @@ public class HandshakeProtocolTest
 
     private void firstMessageTest(NettyFactory.Mode mode, boolean compression) throws Exception
     {
-        FirstHandshakeMessage before = new FirstHandshakeMessage(MessagingService.current_version, mode, compression);
+        FirstHandshakeMessage before = new FirstHandshakeMessage(CURRENT_VERSION, mode, compression);
         buf = before.encode(PooledByteBufAllocator.DEFAULT);
         FirstHandshakeMessage after = FirstHandshakeMessage.maybeDecode(buf);
         assertEquals(before, after);
@@ -74,7 +77,7 @@ public class HandshakeProtocolTest
     @Test
     public void secondMessageTest() throws Exception
     {
-        SecondHandshakeMessage before = new SecondHandshakeMessage(MessagingService.current_version);
+        SecondHandshakeMessage before = new SecondHandshakeMessage(CURRENT_VERSION);
         buf = before.encode(PooledByteBufAllocator.DEFAULT);
         SecondHandshakeMessage after = SecondHandshakeMessage.maybeDecode(buf);
         assertEquals(before, after);
@@ -85,7 +88,7 @@ public class HandshakeProtocolTest
     @Test
     public void thirdMessageTest() throws Exception
     {
-        ThirdHandshakeMessage before = new ThirdHandshakeMessage(MessagingService.current_version, FBUtilities.getBroadcastAddress());
+        ThirdHandshakeMessage before = new ThirdHandshakeMessage(CURRENT_VERSION, FBUtilities.getBroadcastAddress());
         buf = before.encode(PooledByteBufAllocator.DEFAULT);
         ThirdHandshakeMessage after = ThirdHandshakeMessage.maybeDecode(buf);
         assertEquals(before, after);

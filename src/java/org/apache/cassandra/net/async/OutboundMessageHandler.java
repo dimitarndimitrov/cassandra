@@ -19,12 +19,9 @@
 package org.apache.cassandra.net.async;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,16 +35,13 @@ import io.netty.handler.codec.UnsupportedMessageTypeException;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 
+import org.apache.cassandra.db.monitoring.ApproximateTime;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.Message;
-import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.MessagingVersion;
 import org.apache.cassandra.net.ProtocolVersion;
-import org.apache.cassandra.tracing.TraceState;
 import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.utils.NanoTimeToCurrentTimeMillis;
 import org.apache.cassandra.utils.NoSpamLogger;
-import org.apache.cassandra.utils.UUIDGen;
 
 import static org.apache.cassandra.config.Config.PROPERTY_PREFIX;
 
@@ -61,9 +55,9 @@ import static org.apache.cassandra.config.Config.PROPERTY_PREFIX;
  * Note: this class derives from {@link ChannelDuplexHandler} so we can intercept calls to
  * {@link #userEventTriggered(ChannelHandlerContext, Object)} and {@link #channelWritabilityChanged(ChannelHandlerContext)}.
  */
-class MessageOutHandler extends ChannelDuplexHandler
+class OutboundMessageHandler extends ChannelDuplexHandler
 {
-    private static final Logger logger = LoggerFactory.getLogger(MessageOutHandler.class);
+    private static final Logger logger = LoggerFactory.getLogger(OutboundMessageHandler.class);
     private static final NoSpamLogger errorLogger = NoSpamLogger.getLogger(logger, 1, TimeUnit.SECONDS);
 
     /**
@@ -96,12 +90,12 @@ class MessageOutHandler extends ChannelDuplexHandler
 
     private final Supplier<QueuedMessage> backlogSupplier;
 
-    MessageOutHandler(OutboundConnectionIdentifier connectionId, ProtocolVersion targetProtocolVersion, ChannelWriter channelWriter, Supplier<QueuedMessage> backlogSupplier)
+    OutboundMessageHandler(OutboundConnectionIdentifier connectionId, ProtocolVersion targetProtocolVersion, ChannelWriter channelWriter, Supplier<QueuedMessage> backlogSupplier)
     {
         this (connectionId, targetProtocolVersion, channelWriter, backlogSupplier, AUTO_FLUSH_THRESHOLD);
     }
 
-    MessageOutHandler(OutboundConnectionIdentifier connectionId, ProtocolVersion targetProtocolVersion, ChannelWriter channelWriter, Supplier<QueuedMessage> backlogSupplier, int flushThreshold)
+    OutboundMessageHandler(OutboundConnectionIdentifier connectionId, ProtocolVersion targetProtocolVersion, ChannelWriter channelWriter, Supplier<QueuedMessage> backlogSupplier, int flushThreshold)
     {
         this.connectionId = connectionId;
         this.targetProtocolVersion = targetProtocolVersion;
@@ -130,7 +124,7 @@ class MessageOutHandler extends ChannelDuplexHandler
 
             QueuedMessage msg = (QueuedMessage) o;
             Message.Serializer serializer = Message.createSerializer(MessagingVersion.from(targetProtocolVersion),
-                                                                     System.currentTimeMillis());
+                                                                     ApproximateTime.currentTimeMillis());
             long serializedSize = serializer.serializedSize(msg.message);
             assert serializedSize <= Integer.MAX_VALUE : "Invalid message, too large: " + serializedSize;
             int messageSize = (int)serializedSize;
@@ -212,7 +206,7 @@ class MessageOutHandler extends ChannelDuplexHandler
         if (!ctx.channel().isWritable())
             return;
 
-        // guarantee at least a minimal amount of progress (one messge from the backlog) by using a do-while loop.
+        // guarantee at least a minimal amount of progress (one message from the backlog) by using a do-while loop.
         do
         {
             QueuedMessage msg = backlogSupplier.get();

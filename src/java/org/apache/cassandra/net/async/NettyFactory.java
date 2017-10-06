@@ -43,11 +43,13 @@ import io.netty.util.internal.logging.Slf4JLoggerFactory;
 import net.jpountz.lz4.LZ4Factory;
 import net.jpountz.xxhash.XXHashFactory;
 import org.apache.cassandra.auth.IInternodeAuthenticator;
+import org.apache.cassandra.concurrent.TPC;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions.InternodeEncryption;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.security.SSLFactory;
 import org.apache.cassandra.service.NativeTransportService;
 import org.apache.cassandra.utils.ChecksumType;
@@ -84,7 +86,7 @@ public final class NettyFactory
             InternalLoggerFactory.setDefaultFactory(Slf4JLoggerFactory.INSTANCE);
     }
 
-    private static final boolean DEFAULT_USE_EPOLL = NativeTransportService.useEpoll();
+    private static final boolean DEFAULT_USE_EPOLL = TPC.USE_EPOLL;
     static
     {
         if (!DEFAULT_USE_EPOLL)
@@ -351,19 +353,19 @@ public final class NettyFactory
         inboundGroup.shutdownGracefully();
     }
 
-    static Lz4FrameEncoder createLz4Encoder(int protocolVersion)
+    static Lz4FrameEncoder createLz4Encoder(ProtocolVersion protocolVersion)
     {
         return new Lz4FrameEncoder(LZ4Factory.fastestInstance(), false, COMPRESSION_BLOCK_SIZE, checksumForFrameEncoders(protocolVersion));
     }
 
-    private static Checksum checksumForFrameEncoders(int protocolVersion)
+    private static Checksum checksumForFrameEncoders(ProtocolVersion protocolVersion)
     {
-        if (protocolVersion >= MessagingService.current_version)
+        if (protocolVersion.compareTo(MessagingService.current_version.protocolVersion()) >= 0)
             return ChecksumType.CRC32.newInstance();
         return XXHashFactory.fastestInstance().newStreamingHash32(LZ4_HASH_SEED).asChecksum();
     }
 
-    static Lz4FrameDecoder createLz4Decoder(int protocolVersion)
+    static Lz4FrameDecoder createLz4Decoder(ProtocolVersion protocolVersion)
     {
         return new Lz4FrameDecoder(LZ4Factory.fastestInstance(), checksumForFrameEncoders(protocolVersion));
     }

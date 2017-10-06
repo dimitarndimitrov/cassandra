@@ -30,15 +30,15 @@ import org.junit.Test;
 
 import org.apache.cassandra.auth.AllowAllInternodeAuthenticator;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.db.WriteResponse;
 import org.apache.cassandra.gms.GossipDigestSyn;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataInputPlus;
-import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.BackPressureState;
-import org.apache.cassandra.net.MessageOut;
-import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.EmptyPayload;
+import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.Response;
+import org.apache.cassandra.net.Verbs;
 import org.apache.cassandra.net.async.OutboundConnectionIdentifier.ConnectionType;
+import org.jboss.byteman.contrib.bmunit.BMRule;
+import org.jboss.byteman.contrib.bmunit.BMRules;
 
 public class OutboundMessagingPoolTest
 {
@@ -49,6 +49,11 @@ public class OutboundMessagingPoolTest
             {{ add(ConnectionType.GOSSIP); add(ConnectionType.LARGE_MESSAGE); add(ConnectionType.SMALL_MESSAGE); }};
 
     private OutboundMessagingPool pool;
+
+    private static final Message<EmptyPayload> newDummyResponse()
+    {
+        return Response.testResponse(LOCAL_ADDR.getAddress(), REMOTE_ADDR.getAddress(), Verbs.WRITES.WRITE, EmptyPayload.instance);
+    }
 
     @BeforeClass
     public static void before()
@@ -74,41 +79,29 @@ public class OutboundMessagingPoolTest
     public void getConnection_Gossip()
     {
         GossipDigestSyn syn = new GossipDigestSyn("cluster", "partitioner", new ArrayList<>(0));
-        MessageOut<GossipDigestSyn> message = new MessageOut<>(MessagingService.Verb.GOSSIP_DIGEST_SYN,
-                                                                              syn, GossipDigestSyn.serializer);
-        Assert.assertEquals(ConnectionType.GOSSIP, pool.getConnection(message).getConnectionId().type());
+        Message<GossipDigestSyn> gossipMessage = Verbs.GOSSIP.SYN.newRequest(LOCAL_ADDR.getAddress(), syn);
+        Assert.assertEquals(ConnectionType.GOSSIP, pool.getConnection(gossipMessage).getConnectionId().type());
     }
 
     @Test
     public void getConnection_SmallMessage()
     {
-        MessageOut message = WriteResponse.createMessage();
-        Assert.assertEquals(ConnectionType.SMALL_MESSAGE, pool.getConnection(message).getConnectionId().type());
+        Message<?> dummyResponse = newDummyResponse();
+        Assert.assertEquals(ConnectionType.SMALL_MESSAGE, pool.getConnection(dummyResponse).getConnectionId().type());
     }
 
     @Test
+    @BMRules(rules = { @BMRule(name = "Tweak serialized size",
+                               targetClass = "org.apache.cassandra.net.MessageSerializer",
+                               targetMethod = "getSerializedSize",
+                               action = "return $largeMessageSize;") } )
     public void getConnection_LargeMessage()
     {
-        // just need a serializer to report a size, as fake as it may be
-        IVersionedSerializer<Object> serializer = new IVersionedSerializer<Object>()
-        {
-            public void serialize(Object o, DataOutputPlus out, int version)
-            {
 
-            }
+        long largeMessageSize = OutboundMessagingPool.LARGE_MESSAGE_THRESHOLD + 1;
 
-            public Object deserialize(DataInputPlus in, int version)
-            {
-                return null;
-            }
-
-            public long serializedSize(Object o, int version)
-            {
-                return OutboundMessagingPool.LARGE_MESSAGE_THRESHOLD + 1;
-            }
-        };
-        MessageOut message = new MessageOut<>(MessagingService.Verb.UNUSED_5, "payload", serializer);
-        Assert.assertEquals(ConnectionType.LARGE_MESSAGE, pool.getConnection(message).getConnectionId().type());
+        Message<?> dummyResponse = newDummyResponse();
+        Assert.assertEquals(ConnectionType.LARGE_MESSAGE, pool.getConnection(dummyResponse).getConnectionId().type());
     }
 
     @Test
