@@ -49,6 +49,8 @@ import org.apache.cassandra.net.async.InboundHandshakeHandler.State;
 
 import static org.apache.cassandra.net.async.NettyFactory.Mode.MESSAGING;
 
+// TODO Duplicate most if not all of these tests with a DSE version (hitting the new messaging protocol and code paths),
+// and with an OSS version (hitting the old messaging protocol and code paths)
 public class InboundHandshakeHandlerTest
 {
     private static final InetSocketAddress addr = new InetSocketAddress("127.0.0.1", 0);
@@ -153,7 +155,7 @@ public class InboundHandshakeHandlerTest
     public void handleStart_VersionTooHigh() throws IOException
     {
         channel.eventLoop();
-        int handshakeVersionTooHigh = CURRENT_VERSION.handshakeVersion + 1;
+        int handshakeVersionTooHigh = modifyHandshakeVersion(CURRENT_VERSION.handshakeVersion, 1);
         ProtocolVersion versionTooHigh = ProtocolVersion.fromHandshakeVersion(handshakeVersionTooHigh);
         buf = new FirstHandshakeMessage(versionTooHigh, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
         State state = handler.handleStart(channel.pipeline().firstContext(), buf);
@@ -165,7 +167,7 @@ public class InboundHandshakeHandlerTest
     @Test
     public void handleStart_VersionLessThan3_0() throws IOException
     {
-        int handshakeVersionLessThan3_0 = VERSION_30.handshakeVersion - 1;
+        int handshakeVersionLessThan3_0 = modifyHandshakeVersion(VERSION_30.handshakeVersion, -1);
         ProtocolVersion versionLessThan3_0 = ProtocolVersion.fromHandshakeVersion(handshakeVersionLessThan3_0);
         buf = new FirstHandshakeMessage(versionLessThan3_0, MESSAGING, true).encode(PooledByteBufAllocator.DEFAULT);
         State state = handler.handleStart(channel.pipeline().firstContext(), buf);
@@ -208,7 +210,7 @@ public class InboundHandshakeHandlerTest
     public void handleMessagingStartResponse_BadMaxVersion() throws IOException
     {
         buf = Unpooled.buffer(32, 32);
-        buf.writeInt(CURRENT_VERSION.handshakeVersion + 1);
+        buf.writeInt(modifyHandshakeVersion(CURRENT_VERSION.handshakeVersion, 1));
         CompactEndpointSerializationHelper.serialize(addr.getAddress(), new ByteBufOutputStream(buf));
         State state = handler.handleMessagingStartResponse(channel.pipeline().firstContext(), buf);
         Assert.assertEquals(State.HANDSHAKE_FAIL, state);
@@ -235,7 +237,7 @@ public class InboundHandshakeHandlerTest
         Assert.assertNotNull(pipeline.get(InboundHandshakeHandler.class));
 
         handler.setupMessagingPipeline(pipeline, addr.getAddress(), false, CURRENT_VERSION);
-        Assert.assertNotNull(pipeline.get(OSSInboundMessageHandler.class));
+        Assert.assertNotNull(pipeline.get(InboundMessageHandler.class));
         Assert.assertNull(pipeline.get(Lz4FrameDecoder.class));
         Assert.assertNull(pipeline.get(Lz4FrameEncoder.class));
         Assert.assertNull(pipeline.get(InboundHandshakeHandler.class));
@@ -248,7 +250,7 @@ public class InboundHandshakeHandlerTest
         Assert.assertNotNull(pipeline.get(InboundHandshakeHandler.class));
 
         handler.setupMessagingPipeline(pipeline, addr.getAddress(), true, CURRENT_VERSION);
-        Assert.assertNotNull(pipeline.get(OSSInboundMessageHandler.class));
+        Assert.assertNotNull(pipeline.get(InboundMessageHandler.class));
         Assert.assertNotNull(pipeline.get(Lz4FrameDecoder.class));
         Assert.assertNull(pipeline.get(Lz4FrameEncoder.class));
         Assert.assertNull(pipeline.get(InboundHandshakeHandler.class));
@@ -291,5 +293,20 @@ public class InboundHandshakeHandlerTest
         handler.failHandshake(channel.pipeline().firstContext());
         Assert.assertSame(State.AWAIT_MESSAGING_START_RESPONSE, handler.getState());
         Assert.assertTrue(channel.isOpen());
+    }
+
+    // TODO Having this here is not really correct - it should be abstracted away by ProtocolVersion.
+    private int modifyHandshakeVersion(int handshakeVersion, int versionModifier)
+    {
+        int resultingVersion = 0;
+        if (handshakeVersion < 256)
+        {
+            resultingVersion = Math.min(255, handshakeVersion + versionModifier);
+        }
+        else
+        {
+            resultingVersion = (((handshakeVersion >>> 8) + versionModifier) << 8) + 255;
+        }
+        return resultingVersion;
     }
 }

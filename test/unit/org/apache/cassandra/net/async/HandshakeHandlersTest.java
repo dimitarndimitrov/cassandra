@@ -51,7 +51,7 @@ import static org.apache.cassandra.net.async.OutboundMessagingConnection.State.R
 
 public class HandshakeHandlersTest
 {
-    private static final String KEYSPACE1 = "NettyPipilineTest";
+    private static final String KEYSPACE1 = "NettyPipelineTest";
     private static final String STANDARD1 = "Standard1";
 
     private static final InetSocketAddress LOCAL_ADDR = new InetSocketAddress("127.0.0.1", 9999);
@@ -92,7 +92,7 @@ public class HandshakeHandlersTest
         Object o;
         while ((o = outboundChannel.readOutbound()) != null)
             inboundChannel.writeInbound(o);
-            Assert.assertEquals(1, inboundChannel.outboundMessages().size());
+        Assert.assertEquals(1, inboundChannel.outboundMessages().size());
 
         // move internode protocol Msg2 to the client's channel
         while ((o = inboundChannel.readOutbound()) != null)

@@ -37,8 +37,6 @@ import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.Response;
 import org.apache.cassandra.net.Verbs;
 import org.apache.cassandra.net.async.OutboundConnectionIdentifier.ConnectionType;
-import org.jboss.byteman.contrib.bmunit.BMRule;
-import org.jboss.byteman.contrib.bmunit.BMRules;
 
 public class OutboundMessagingPoolTest
 {
@@ -91,17 +89,12 @@ public class OutboundMessagingPoolTest
     }
 
     @Test
-    @BMRules(rules = { @BMRule(name = "Tweak serialized size",
-                               targetClass = "org.apache.cassandra.net.MessageSerializer",
-                               targetMethod = "getSerializedSize",
-                               action = "return $largeMessageSize;") } )
     public void getConnection_LargeMessage()
     {
 
-        long largeMessageSize = OutboundMessagingPool.LARGE_MESSAGE_THRESHOLD + 1;
-
-        Message<?> dummyResponse = newDummyResponse();
-        Assert.assertEquals(ConnectionType.LARGE_MESSAGE, pool.getConnection(dummyResponse).getConnectionId().type());
+        int largeMessageSize = (int) (OutboundMessagingPool.LARGE_MESSAGE_THRESHOLD + 1);
+        Message<?> largeMessage = Response.testResponse(LOCAL_ADDR.getAddress(), REMOTE_ADDR.getAddress(), Verbs.WRITES.WRITE, EmptyPayload.instance, largeMessageSize);
+        Assert.assertEquals(ConnectionType.LARGE_MESSAGE, pool.getConnection(largeMessage).getConnectionId().type());
     }
 
     @Test

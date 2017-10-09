@@ -193,6 +193,7 @@ public class OutboundConnectionParams
 
         public OutboundConnectionParams build()
         {
+            Preconditions.checkArgument(protocolVersion != null, "protocol version cannot be uninitialized");
             Preconditions.checkArgument(protocolVersion.handshakeVersion > 0, "illegal protocol version: " + protocolVersion.handshakeVersion);
             Preconditions.checkArgument(sendBufferSize > 0 && sendBufferSize < 1 << 20, "illegal send buffer size: " + sendBufferSize);
 

@@ -53,8 +53,8 @@ import org.apache.cassandra.utils.CoalescingStrategies.CoalescingStrategy;
 public class ChannelWriterTest
 {
     private static final int COALESCE_WINDOW_MS = 10;
-    private static final InetSocketAddress LOCAL_ADDR = new InetSocketAddress("127.0.0.1", 0);
-    private static final InetSocketAddress REMOTE_ADDR = new InetSocketAddress("127.0.0.2", 0);
+    private static final InetSocketAddress LOCAL_ADDR = new InetSocketAddress("127.0.0.1", 9999);
+    private static final InetSocketAddress REMOTE_ADDR = new InetSocketAddress("127.0.0.2", 9999);
 
     private EmbeddedChannel channel;
     private ChannelWriter channelWriter;

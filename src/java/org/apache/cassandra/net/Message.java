@@ -407,8 +407,8 @@ public abstract class Message<P>
     public interface Serializer
     {
         public <P> void serialize(Message<P> message, DataOutputPlus out) throws IOException;
-        // TODO This should be made int, in order to be consistent with the majority of the code where message size
-        // is being used. Message size >2 GB may very well be a behavior-breaking edge case.
+        // TODO Maybe this should return an int, in order to be consistent with the fact that we're currently sending
+        // it through the wire as an int. There's even an assert in OutboundMessageHandler.write()...
         public <P> long serializedSize(Message<P> message);
         public <P> Message<P> deserialize(DataInputPlus in, InetAddress from) throws IOException;
         public <P> Message<P> deserializePayload(DataInputPlus in, Header headerParams) throws IOException;

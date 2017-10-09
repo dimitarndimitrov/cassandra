@@ -131,6 +131,7 @@ class OutboundMessageHandler extends ChannelDuplexHandler
 
             Tracing.instance.onMessageSend(msg.message, messageSize);
 
+            out = ctx.alloc().ioBuffer(messageSize);
             DataOutputPlus outStream = new ByteBufDataOutputPlus(out);
             serializer.writeSerializedSize(messageSize, outStream);
             serializer.serialize(msg.message, outStream);

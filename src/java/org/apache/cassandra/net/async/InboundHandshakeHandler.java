@@ -237,6 +237,7 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
                      peer,
                      maxVersion.handshakeVersion,
                      MessagingService.instance().getVersion(peer).protocolVersion().handshakeVersion);
+        version = maxVersion;
 
         setupMessagingPipeline(ctx.pipeline(), peer, compressed, version);
         return State.MESSAGING_HANDSHAKE_COMPLETE;

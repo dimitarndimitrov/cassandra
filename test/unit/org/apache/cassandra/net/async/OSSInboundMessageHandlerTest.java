@@ -86,26 +86,31 @@ public class OSSInboundMessageHandlerTest
         Assert.assertFalse(channel.isOpen());
     }
 
-    @Test
-    public void decode_HappyPath_NoParameters() throws Exception
-    {
-        Message<?> result = decode_HappyPath(Collections.emptyMap());
-        Assert.assertTrue(result.parameters().isEmpty());
-    }
+    // TODO Figure out if custom message parameters are supported as part of the header or part of the payload
+    // in the OSS messaging protocol. Judging by OSSMessageSerializer, it's _not_ the former.
 
-    @Test
-    public void decode_HappyPath_WithParameters() throws Exception
-    {
-        Map<String, byte[]> parameters = new HashMap<>();
-        parameters.put("p1", "val1".getBytes(Charsets.UTF_8));
-        parameters.put("p2", "val2".getBytes(Charsets.UTF_8));
-        Message<?> result = decode_HappyPath(parameters);
-        Assert.assertEquals(2, result.parameters().size());
-    }
+//    @Test
+//    public void decode_HappyPath_NoParameters() throws Exception
+//    {
+//        Message<?> result = decode_HappyPath(Collections.emptyMap());
+//        Assert.assertTrue(result.parameters().isEmpty());
+//    }
+//
+//
+//    @Test
+//    public void decode_HappyPath_WithParameters() throws Exception
+//    {
+//        Map<String, byte[]> parameters = new HashMap<>();
+//        parameters.put("p1", "val1".getBytes(Charsets.UTF_8));
+//        parameters.put("p2", "val2".getBytes(Charsets.UTF_8));
+//        Message<?> result = decode_HappyPath(parameters);
+//        Assert.assertEquals(2, result.parameters().size());
+//    }
 
     private Message<?> decode_HappyPath(Map<String, byte[]> parameters) throws Exception
     {
-        Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(addr.getAddress(), EmptyPayload.instance);
+        Message outboundMessage = Verbs.GOSSIP.SHUTDOWN.newRequest(addr.getAddress(), EmptyPayload.instance);
+        int msgId = outboundMessage.id();
         outboundMessage = outboundMessage.addParameters(MessageParameters.from(parameters));
         serialize(outboundMessage);
 
@@ -115,7 +120,7 @@ public class OSSInboundMessageHandlerTest
         handler.decode(null, buf, out);
 
         Assert.assertNotNull(wrapper.message);
-        Assert.assertEquals(MSG_ID, wrapper.message.id());
+        Assert.assertEquals(msgId, wrapper.message.id());
         Assert.assertEquals(outboundMessage.from(), wrapper.message.from());
         Assert.assertEquals(outboundMessage.verb(), wrapper.message.verb());
         Assert.assertTrue(out.isEmpty());
@@ -135,6 +140,7 @@ public class OSSInboundMessageHandlerTest
     public void decode_WithHalfReceivedParameters() throws Exception
     {
         Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(addr.getAddress(), EmptyPayload.instance);
+        int msgId = outboundMessage.id();
         outboundMessage = outboundMessage.addParameters(MessageParameters.from(ImmutableMap.of("p3", "val1".getBytes(Charsets.UTF_8))));
         serialize(outboundMessage);
 
@@ -151,7 +157,7 @@ public class OSSInboundMessageHandlerTest
         Assert.assertNull(wrapper.message);
 
         OSSMessageHeader header = handler.getMessageHeader();
-        Assert.assertEquals(MSG_ID, header.messageId);
+        Assert.assertEquals(msgId, header.messageId);
         Assert.assertEquals(outboundMessage.verb(), header.verb.getDefinition());
         Assert.assertEquals(outboundMessage.from(), header.from);
         Assert.assertTrue(out.isEmpty());

@@ -75,6 +75,36 @@ public class Response<Q> extends Message<Q>
     }
 
     @VisibleForTesting
+    public static <R> Response<R> testResponse(InetAddress from,
+                                               InetAddress to,
+                                               Verb<?, R> verb,
+                                               R payload,
+                                               long payloadSize)
+    {
+        return new Response<R>(from,
+                               to,
+                               -1,
+                               verb,
+                               new Data<>(payload, payloadSize, System.currentTimeMillis(), Long.MAX_VALUE));
+    }
+
+    @VisibleForTesting
+    public static <R> Response<R> testResponse(InetAddress from,
+                                               InetAddress to,
+                                               Verb<?, R> verb,
+                                               R payload,
+                                               long payloadSize,
+                                               long createdAtMillis,
+                                               long timeoutMillis)
+    {
+        return new Response<R>(from,
+                               to,
+                               -1,
+                               verb,
+                               new Data<>(payload, payloadSize, createdAtMillis, timeoutMillis));
+    }
+
+    @VisibleForTesting
     public static <R> Response<R> localTestResponse(Verb<?, R> verb, R payload)
     {
         InetAddress local = FBUtilities.getLocalAddress();

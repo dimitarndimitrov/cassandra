@@ -89,6 +89,7 @@ public class HandshakeProtocol
 
         public FirstHandshakeMessage(ProtocolVersion version, NettyFactory.Mode mode, boolean compressionEnabled)
         {
+            assert version != null;
             this.version = version;
             this.mode = mode;
             this.compressionEnabled = compressionEnabled;
@@ -97,13 +98,7 @@ public class HandshakeProtocol
         @VisibleForTesting
         int encodeFlags()
         {
-            int flags = 0;
-            if (compressionEnabled)
-                flags |= 1 << 2;
-            if (mode == NettyFactory.Mode.STREAMING)
-                flags |= 1 << 3;
-            flags |= (version.handshakeVersion << 8);
-            return flags;
+            return version.makeProtocolHeader(compressionEnabled, mode == NettyFactory.Mode.STREAMING);
         }
 
         public ByteBuf encode(ByteBufAllocator allocator)
@@ -122,12 +117,12 @@ public class HandshakeProtocol
 
             MessagingService.validateMagic(in.readInt());
             int flags = in.readInt();
-            int handshakeVersion = MessagingService.getBits(flags, 15, 8);
+            ProtocolVersion protocolVersion = ProtocolVersion.fromProtocolHeader(flags);
             NettyFactory.Mode mode = MessagingService.getBits(flags, 3, 1) == 1
                                      ? NettyFactory.Mode.STREAMING
                                      : NettyFactory.Mode.MESSAGING;
             boolean compressed = MessagingService.getBits(flags, 2, 1) == 1;
-            return new FirstHandshakeMessage(ProtocolVersion.fromHandshakeVersion(handshakeVersion), mode, compressed);
+            return new FirstHandshakeMessage(protocolVersion, mode, compressed);
         }
 
         @Override
@@ -137,7 +132,7 @@ public class HandshakeProtocol
                 return false;
 
             FirstHandshakeMessage that = (FirstHandshakeMessage)other;
-            return this.version == that.version
+            return this.version.equals(that.version)
                    && this.mode == that.mode
                    && this.compressionEnabled == that.compressionEnabled;
         }
@@ -169,6 +164,7 @@ public class HandshakeProtocol
 
         SecondHandshakeMessage(ProtocolVersion version)
         {
+            assert version != null;
             this.version = version;
         }
 
@@ -189,13 +185,13 @@ public class HandshakeProtocol
         public boolean equals(Object other)
         {
             return other instanceof SecondHandshakeMessage
-                   && this.version.handshakeVersion == ((SecondHandshakeMessage) other).version.handshakeVersion;
+                   && this.version.equals(((SecondHandshakeMessage) other).version);
         }
 
         @Override
         public int hashCode()
         {
-            return Integer.hashCode(version.handshakeVersion);
+            return version.hashCode();
         }
 
         @Override
@@ -230,6 +226,7 @@ public class HandshakeProtocol
 
         ThirdHandshakeMessage(ProtocolVersion version, InetAddress address)
         {
+            assert version != null;
             this.version = version;
             this.address = address;
         }
@@ -284,14 +281,14 @@ public class HandshakeProtocol
                 return false;
 
             ThirdHandshakeMessage that = (ThirdHandshakeMessage) other;
-            return this.version.handshakeVersion == that.version.handshakeVersion
+            return this.version.equals(that.version)
                    && Objects.equals(this.address, that.address);
         }
 
         @Override
         public int hashCode()
         {
-            return Objects.hash(version.handshakeVersion, address);
+            return Objects.hash(version, address);
         }
 
         @Override

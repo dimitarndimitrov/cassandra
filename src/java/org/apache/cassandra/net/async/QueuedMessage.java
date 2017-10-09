@@ -52,7 +52,6 @@ public class QueuedMessage implements CoalescingStrategies.Coalescable
     /** don't drop a non-droppable message just because it's timestamp is expired */
     public boolean isTimedOut()
     {
-        // TODO Figure out if this should be fully replaced by (the currently non-public) Message.isTimedOut(long).
         return !message.verb().isOneWay() && timestampNanos < System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(message.timeoutMillis());
     }
 

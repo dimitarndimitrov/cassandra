@@ -20,17 +20,43 @@ package org.apache.cassandra.net.async;
 
 import org.junit.Test;
 
+import org.apache.cassandra.net.MessagingService;
+
 public class OutboundConnectionParamsTest
 {
+
+    @Test
+    public void build_RegularParameters()
+    {
+        OutboundConnectionParams.builder()
+                                .protocolVersion(MessagingService.current_version.protocolVersion())
+                                .sendBufferSize(1 << 10)
+                                .build();
+    }
+
+    @Test (expected = IllegalArgumentException.class)
+    public void build_SendNullProtocolVersion()
+    {
+        OutboundConnectionParams.builder()
+                                .sendBufferSize(1 << 10)
+                                .build();
+    }
+
     @Test (expected = IllegalArgumentException.class)
     public void build_SendSizeLessThanZero()
     {
-        OutboundConnectionParams.builder().sendBufferSize(-1).build();
+        OutboundConnectionParams.builder()
+                                .protocolVersion(MessagingService.current_version.protocolVersion())
+                                .sendBufferSize(-1)
+                                .build();
     }
 
     @Test (expected = IllegalArgumentException.class)
     public void build_SendSizeHuge()
     {
-        OutboundConnectionParams.builder().sendBufferSize(1 << 30).build();
+        OutboundConnectionParams.builder()
+                                .protocolVersion(MessagingService.current_version.protocolVersion())
+                                .sendBufferSize(1 << 30)
+                                .build();
     }
 }

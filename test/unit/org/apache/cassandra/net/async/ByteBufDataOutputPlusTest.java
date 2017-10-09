@@ -77,21 +77,20 @@ public class ByteBufDataOutputPlusTest
     @Test
     public void compareBufferSizes() throws IOException
     {
+        Message<?> message = getMessage().message;
         Message.Serializer serializer = Message.createSerializer(MessagingService.current_version, -1);
-        final int currentFrameSize = (int) serializer.serializedSize(getMessage().message);//getMessage().message.serializedSize(MessagingService.current_version);
+        final int currentFrameSize = (int) serializer.serializedSize(message);
 
         ByteBuffer buffer = ByteBuffer.allocateDirect(currentFrameSize); //bufferedOut.nioBuffer(0, bufferedOut.writableBytes());
-        //getMessage().message.serialize(new DataOutputBuffer(buffer), MessagingService.current_version);
-        serializer.serialize(getMessage().message, new DataOutputBuffer(buffer));
+        ByteBuf bbosOut = PooledByteBufAllocator.DEFAULT.ioBuffer(currentFrameSize, currentFrameSize);
+        serializer.serialize(message, new ByteBufDataOutputPlus(bbosOut));
+        serializer.serialize(message, new DataOutputBuffer(buffer));
+
         Assert.assertFalse(buffer.hasRemaining());
         Assert.assertEquals(buffer.capacity(), buffer.position());
 
-        ByteBuf bbosOut = PooledByteBufAllocator.DEFAULT.ioBuffer(currentFrameSize, currentFrameSize);
         try
         {
-            //getMessage().message.serialize(new ByteBufDataOutputPlus(bbosOut), MessagingService.current_version);
-            serializer.serialize(getMessage().message, new ByteBufDataOutputPlus(bbosOut));
-
             Assert.assertFalse(bbosOut.isWritable());
             Assert.assertEquals(bbosOut.capacity(), bbosOut.writerIndex());
 

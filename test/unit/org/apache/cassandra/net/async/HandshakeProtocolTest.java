@@ -25,7 +25,7 @@ import org.junit.Test;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.MessagingVersion;
 import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.async.HandshakeProtocol.FirstHandshakeMessage;
 import org.apache.cassandra.net.async.HandshakeProtocol.SecondHandshakeMessage;
@@ -36,8 +36,7 @@ import static org.junit.Assert.assertEquals;
 
 public class HandshakeProtocolTest
 {
-    private static final ProtocolVersion CURRENT_VERSION = MessagingService.current_version.protocolVersion();
-
+    private static final ProtocolVersion CURRENT_VERSION = MessagingVersion.OSS_3014.protocolVersion();
     private ByteBuf buf;
 
     @BeforeClass
@@ -60,8 +59,8 @@ public class HandshakeProtocolTest
     {
         firstMessageTest(NettyFactory.Mode.MESSAGING, false);
         firstMessageTest(NettyFactory.Mode.MESSAGING, true);
-        firstMessageTest(NettyFactory.Mode.STREAMING, false);
-        firstMessageTest(NettyFactory.Mode.STREAMING, true);
+        //firstMessageTest(NettyFactory.Mode.STREAMING, false);
+        //firstMessageTest(NettyFactory.Mode.STREAMING, true);
     }
 
     private void firstMessageTest(NettyFactory.Mode mode, boolean compression) throws Exception

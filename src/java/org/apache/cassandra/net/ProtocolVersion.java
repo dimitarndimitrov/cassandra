@@ -60,6 +60,9 @@ public class ProtocolVersion implements Comparable<ProtocolVersion>
     static ProtocolVersion dse(int version)
     {
         assert version < 256;
+        // TODO Consider making the DSE handshake version the actual value that needs to be written in the raw protocol
+        // header. What we are using right now (version << 8) is neither what actually goes through the wire, nor what
+        // is being considered the actual DSE version after unpacking the raw protocol header bits.
         return new ProtocolVersion(true, version, (version << 24) | (0xFF << 8), version << 8);
     }
 
@@ -85,7 +88,7 @@ public class ProtocolVersion implements Comparable<ProtocolVersion>
      * @param isStream whether the connection is used for streaming.
      * @return the protocol connection header corresponding to this version.
      */
-    int makeProtocolHeader(boolean compressionEnabled, boolean isStream)
+    public int makeProtocolHeader(boolean compressionEnabled, boolean isStream)
     {
         int header = rawHeader;
         if (compressionEnabled)
@@ -95,7 +98,7 @@ public class ProtocolVersion implements Comparable<ProtocolVersion>
         return header;
     }
 
-    static ProtocolVersion fromProtocolHeader(int header)
+    public static ProtocolVersion fromProtocolHeader(int header)
     {
         int version = MessagingService.getBits(header, 15, 8);
         return version == 0xFF ? dse(MessagingService.getBits(header, 31, 8)) : oss(version);
@@ -103,7 +106,15 @@ public class ProtocolVersion implements Comparable<ProtocolVersion>
 
     public static ProtocolVersion fromHandshakeVersion(int handshakeVersion)
     {
-        return handshakeVersion < 256 ? oss(handshakeVersion) : dse(handshakeVersion >>> 8);
+        if (handshakeVersion < 256)
+            return oss(handshakeVersion);
+        // TODO Consider making the DSE handshake version the actual value that needs to be written in the raw protocol
+        // header. What we are using right now (version << 8) is neither what actually goes through the wire, nor what
+        // is being considered the actual DSE version after unpacking the raw protocol header bits.
+        // assert (handshakeVersion & 255) == 255;
+        handshakeVersion = handshakeVersion >>> 8;
+        assert handshakeVersion < 256;
+        return dse(handshakeVersion);
     }
 
     public int compareTo(ProtocolVersion protocolVersion)
@@ -115,5 +126,20 @@ public class ProtocolVersion implements Comparable<ProtocolVersion>
     public String toString()
     {
         return isDSE ? String.format("dse(%d)", version) : String.valueOf(version);
+    }
+
+    @Override
+    public int hashCode() { return Integer.hashCode(this.handshakeVersion); }
+
+    @Override
+    public boolean equals(Object o)
+    {
+        if (this == o)
+            return true;
+        if (!(o instanceof ProtocolVersion))
+            return false;
+        ProtocolVersion other = (ProtocolVersion) o;
+        // With the current implementation, comparing just handshake versions is enough.
+        return this.handshakeVersion == other.handshakeVersion;
     }
 }

@@ -54,7 +54,7 @@ import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.MessagingServiceTest;
 import org.apache.cassandra.net.ProtocolVersion;
-import org.apache.cassandra.net.Request;
+import org.apache.cassandra.net.Response;
 import org.apache.cassandra.net.Verbs;
 import org.apache.cassandra.net.async.OutboundHandshakeHandler.HandshakeResult;
 import org.apache.cassandra.net.async.OutboundMessagingConnection.State;
@@ -129,7 +129,7 @@ public class OutboundMessagingConnectionTest
         Assert.assertEquals(0, omc.backlogSize());
         omc.setState(CLOSED);
         Message outboundMessage = Verbs.GOSSIP.ECHO.newRequest(LOCAL_ADDR.getAddress(), EmptyPayload.instance);
-        Assert.assertTrue(omc.sendMessage(outboundMessage, outboundMessage.id()));
+        Assert.assertFalse(omc.sendMessage(outboundMessage, outboundMessage.id()));
         Assert.assertEquals(0, omc.backlogSize());
         Assert.assertFalse(channel.releaseOutbound());
     }
@@ -255,7 +255,10 @@ public class OutboundMessagingConnectionTest
             }
         };
 
-        Message<?> outboundMessage = Verbs.GOSSIP.ACK.newRequest(REMOTE_ADDR.getAddress(), (GossipDigestAck) null);
+        Message<?> outboundMessage = Response.testResponse(LOCAL_ADDR.getAddress(),
+                                                           REMOTE_ADDR.getAddress(),
+                                                           Verbs.WRITES.WRITE,
+                                                           EmptyPayload.instance);
         OutboundMessagingPool pool = new OutboundMessagingPool(REMOTE_ADDR,
                                                                LOCAL_ADDR,
                                                                null,
@@ -387,7 +390,7 @@ public class OutboundMessagingConnectionTest
         Assert.assertFalse(channelWriter.isClosed());
         Assert.assertEquals(channelWriter, omc.getChannelWriter());
         Assert.assertEquals(READY, omc.getState());
-        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
+        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()).protocolVersion());
         Assert.assertNull(omc.getConnectionTimeoutFuture());
         Assert.assertTrue(connectionTimeoutFuture.isCancelled());
     }
@@ -407,7 +410,7 @@ public class OutboundMessagingConnectionTest
         Assert.assertTrue(channelWriter.isClosed());
         Assert.assertNull(omc.getChannelWriter());
         Assert.assertEquals(CLOSED, omc.getState());
-        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
+        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()).protocolVersion());
         Assert.assertNull(omc.getConnectionTimeoutFuture());
         Assert.assertTrue(connectionTimeoutFuture.isCancelled());
     }
@@ -427,7 +430,7 @@ public class OutboundMessagingConnectionTest
         omc.finishHandshake(result);
         Assert.assertNotNull(omc.getChannelWriter());
         Assert.assertEquals(CREATING_CHANNEL, omc.getState());
-        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
+        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()).protocolVersion());
         Assert.assertEquals(count, omc.backlogSize());
     }
 
@@ -445,7 +448,7 @@ public class OutboundMessagingConnectionTest
         HandshakeResult result = HandshakeResult.failed();
         omc.finishHandshake(result);
         Assert.assertEquals(NOT_READY, omc.getState());
-        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()));
+        Assert.assertEquals(CURRENT_VERSION, MessagingService.instance().getVersion(REMOTE_ADDR.getAddress()).protocolVersion());
         Assert.assertEquals(0, omc.backlogSize());
     }
 
