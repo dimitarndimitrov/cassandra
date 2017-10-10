@@ -30,6 +30,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
@@ -47,8 +48,9 @@ import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.Response;
 import org.apache.cassandra.net.Verbs;
 import org.jboss.byteman.contrib.bmunit.BMRule;
-import org.jboss.byteman.contrib.bmunit.BMRules;
+import org.jboss.byteman.contrib.bmunit.BMUnitRunner;
 
+@RunWith(BMUnitRunner.class)
 public class OutboundMessageHandlerTest
 {
     // TODO Should all tests be duplicated - one instance going through the legacy (OSS) serialization path,
@@ -206,8 +208,8 @@ public class OutboundMessageHandlerTest
     @Test
     @BMRule(name = "Force exception during write",
             targetClass = "org.apache.cassandra.net.MessageSerializer",
-            targetMethod = "<init>(org.apache.cassandra.net.MessagingVersion, long)",
-            action = "throw new RuntimeException(\"this exception is part of the test - DON'T PANIC\")")
+            targetMethod = "serialize",
+            action = "throw new RuntimeException(\"Byteman-generated exception - DON'T PANIC\")")
     public void writeForceExceptionPath()
     {
         Message<?> dummyResponse = newDummyResponse();

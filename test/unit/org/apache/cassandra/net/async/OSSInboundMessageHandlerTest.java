@@ -156,10 +156,10 @@ public class OSSInboundMessageHandlerTest
 
         Assert.assertNull(wrapper.message);
 
-        OSSMessageHeader header = handler.getMessageHeader();
-        Assert.assertEquals(msgId, header.messageId);
-        Assert.assertEquals(outboundMessage.verb(), header.verb.getDefinition());
-        Assert.assertEquals(outboundMessage.from(), header.from);
+        OSSInboundMessageHandler.HeaderData headerData = handler.getMessageHeader();
+        Assert.assertEquals(msgId, headerData.messageId);
+        Assert.assertEquals(outboundMessage.verb(), headerData.verb.getDefinition());
+        Assert.assertEquals(outboundMessage.from(), headerData.from);
         Assert.assertTrue(out.isEmpty());
 
         // now, set the writer index back to the original value to pretend that we actually got more bytes in

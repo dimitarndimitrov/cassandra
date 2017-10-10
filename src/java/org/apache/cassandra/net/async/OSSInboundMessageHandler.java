@@ -60,8 +60,6 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
     /**
      * The default target for consuming deserialized {@link Message}.
      */
-    // TODO Figure out if we need to go through a Consumer, now that there's no need for a BiConsumer (which was
-    // needed to consume both a message and its ID).
     static final Consumer<Message<?>> MESSAGING_SERVICE_CONSUMER = (message) -> MessagingService.instance().receive(message);
 
     private enum State
@@ -95,8 +93,7 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
     private final Consumer<Message<?>> messageConsumer;
 
     private State state;
-    private OSSMessageHeader.Builder builder;
-    private OSSMessageHeader header;
+    private HeaderData headerData;
 
     OSSInboundMessageHandler(InetAddress peer, ProtocolVersion protocolVersion)
     {
@@ -126,8 +123,6 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
             {
                 // an imperfect optimization around calling in.readableBytes() all the time
                 int readableBytes = in.readableBytes();
-                int parameterCount = 0;
-                Map<String, byte[]> parameters = null;
 
                 switch (state)
                 {
@@ -135,12 +130,13 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
                         if (readableBytes < FIRST_SECTION_BYTE_COUNT)
                             return;
                         MessagingService.validateMagic(in.readInt());
-                        builder = new OSSMessageHeader.Builder(MessagingVersion.from(protocolVersion));
-                        header = null;
-                        builder.setMessageId(in.readInt());
+
+                        headerData = new HeaderData();
+                        headerData.messagingVersion = MessagingVersion.from(this.protocolVersion);
+                        headerData.messageId = in.readInt();
                         // make sure to read the sent timestamp, even if DatabaseDescriptor.hasCrossNodeTimeout() is not enabled
-                        int messageTimestamp = in.readInt();
-                        builder.setTimestampLoBits(messageTimestamp);
+                        headerData.timestampLoBits = in.readInt();
+
                         state = State.READ_IP_ADDRESS;
                         readableBytes -= FIRST_SECTION_BYTE_COUNT;
                         // fall-through
@@ -151,41 +147,43 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
                         int serializedAddrSize;
                         if (readableBytes < 1 || readableBytes < (serializedAddrSize = in.getByte(in.readerIndex()) + 1))
                             return;
-                        builder.setFrom(CompactEndpointSerializationHelper.deserialize(inputPlus));
+
+                        headerData.from = CompactEndpointSerializationHelper.deserialize(inputPlus);
+
                         state = State.READ_SECOND_CHUNK;
                         readableBytes -= serializedAddrSize;
                         // fall-through
                     case READ_SECOND_CHUNK:
                         if (readableBytes < SECOND_SECTION_BYTE_COUNT)
                             return;
-                        builder.setVerb(OSSVerb.getVerbById(in.readInt()));
-                        parameterCount = in.readInt();
-                        parameters = parameterCount == 0 ? Collections.emptyMap() : new HashMap<>();
-                        builder.setParameterCount(parameterCount);
-                        state = State.READ_PARAMETERS_DATA;
+
+                        headerData.verb = OSSVerb.getVerbById(in.readInt());
+                        headerData.parameterCount = in.readInt();
+                        headerData.parameters = headerData.parameterCount == 0
+                                                ? Collections.emptyMap()
+                                                : new HashMap<>();
+
+                        state = headerData.parameterCount > 0 ? State.READ_PARAMETERS_DATA : State.READ_PAYLOAD_SIZE;
                         readableBytes -= SECOND_SECTION_BYTE_COUNT;
                         // fall-through
                     case READ_PARAMETERS_DATA:
-                        if (parameterCount > 0)
-                        {
-                            if (!readParameters(in, inputPlus, parameterCount, parameters))
-                                return;
-                            // we read an indeterminate number of bytes for the headers, so just ask the buffer again
-                            readableBytes = in.readableBytes();
-                        }
-                        builder.setParameters(parameters);
+                        if (!readParameters(in, inputPlus, headerData.parameterCount, headerData.parameters))
+                            return;
+                        // we read an indeterminate number of bytes for the parameters, so just ask the buffer again
+                        readableBytes = in.readableBytes();
                         state = State.READ_PAYLOAD_SIZE;
                         // fall-through
                     case READ_PAYLOAD_SIZE:
                         if (readableBytes < 4)
                             return;
-                        builder.setPayloadSize(in.readInt());
-                        header = builder.build();
+
+                        headerData.payloadSize = in.readInt();
+
                         state = State.READ_PAYLOAD;
                         readableBytes -= 4;
                         // fall-through
                     case READ_PAYLOAD:
-                        if (readableBytes < header.payloadSize)
+                        if (readableBytes < headerData.payloadSize)
                             return;
 
                         Message.Serializer serializer = Message.createSerializer(MessagingVersion.from(protocolVersion),
@@ -202,6 +200,14 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
                         //    message/frame) size, and that payload size can be found only after an unknown number of
                         //    header bytes (hence the fairly convoluted decode() implementation and readParameters() /
                         //    canReadNextParam() combo).
+                        OSSMessageHeader header = OSSMessageHeader.from(headerData.messagingVersion,
+                                                                        headerData.messageId,
+                                                                        headerData.timestampLoBits,
+                                                                        headerData.from,
+                                                                        headerData.verb,
+                                                                        headerData.payloadSize,
+                                                                        headerData.parameterCount,
+                                                                        headerData.parameters);
                         Message<Object> message = serializer.deserializePayload(inputPlus, header);
                         if (message != null)
                             messageConsumer.accept(message);
@@ -311,8 +317,21 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
 
     // should ony be used for testing!!!
     @VisibleForTesting
-    OSSMessageHeader getMessageHeader()
+    HeaderData getMessageHeader()
     {
-        return header;
+        return headerData;
+    }
+
+    @VisibleForTesting
+    static class HeaderData
+    {
+        MessagingVersion messagingVersion;
+        int messageId;
+        int timestampLoBits;
+        InetAddress from;
+        OSSVerb verb;
+        int payloadSize;
+        int parameterCount;
+        Map<String, byte[]> parameters;
     }
 }

@@ -302,22 +302,15 @@ public class OSSMessageSerializer implements Message.Serializer
     public Message deserialize(DataInputPlus in, InetAddress from) throws IOException
     {
         MessagingService.validateMagic(in.readInt());
-        OSSMessageHeader.Builder builder = new OSSMessageHeader.Builder(version);
-        int id = in.readInt();
-        builder.setMessageId(id);
+        int messageId = in.readInt();
         int timestampLoBits = in.readInt();
-        //long timestamp = deserializeTimestampPre40(timestampLoBits, from);
-        builder.setTimestampLoBits(timestampLoBits);
 
         // From: it's serialized, but not really used since we know which node is talking to us.
         CompactEndpointSerializationHelper.deserialize(in);
-        builder.setFrom(from);
 
         OSSVerb ossVerb = OSSVerb.getVerbById(in.readInt());
-        builder.setVerb(ossVerb);
 
         int parameterCount = in.readInt();
-        builder.setParameterCount(parameterCount);
         // Creating an immutable map as we'll remove some below.
         Map<String, byte[]> rawParameters = new HashMap<>();
         for (int i = 0; i < parameterCount; i++)
@@ -327,14 +320,20 @@ public class OSSMessageSerializer implements Message.Serializer
             in.readFully(value);
             rawParameters.put(key, value);
         }
-        builder.setParameters(rawParameters);
 
         //Tracing.SessionInfo tracingInfo = extractAndRemoveTracingInfo(rawParameters);
 
         int payloadSize = in.readInt();
-        builder.setPayloadSize(payloadSize);
 
-        return deserializePayload(in, builder.build());
+        OSSMessageHeader header = OSSMessageHeader.from(version,
+                                                        messageId,
+                                                        timestampLoBits,
+                                                        from,
+                                                        ossVerb,
+                                                        payloadSize,
+                                                        parameterCount,
+                                                        rawParameters);
+        return deserializePayload(in, header);
     }
 
     public <P> Message<P> deserializePayload(DataInputPlus in, Message.Header header) throws IOException

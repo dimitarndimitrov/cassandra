@@ -24,96 +24,89 @@ import java.util.Map;
 import com.google.common.collect.ImmutableMap;
 
 /**
- * TODO
+ * An immutable structure, representing a message header in the OSS messaging protocol.
  */
 public class OSSMessageHeader implements Message.Header
 {
+    /**
+     * The messaging protocol version used for this message.
+     */
+    // TODO Do we really need that?
     public final MessagingVersion messagingVersion;
+    /**
+     * The message ID.
+     */
     public final int messageId;
+    /**
+     * The lower bits of the message millisecond timestamp. We assume that they will suffice, and if the
+     * message is received in less than roughly a month, indeed the higher bits can be inferred from the
+     * timestamp at the receiver.
+     */
     public final int timestampLoBits;
+    /**
+     * The origin address of this message.
+     */
     public final InetAddress from;
+    /**
+     * The OSS verb of this message.
+     *
+     * @see OSSVerb
+     */
     public final OSSVerb verb;
+    /**
+     * The message payload size (excluding the header) in bytes.
+     */
     public final int payloadSize;
     /**
-     * Total number of parameters expected to be populated in {@link #parameters}.
+     * The total number of parameters expected to be populated in {@link #parameters}.
      */
     public final int parameterCount;
+    /**
+     * The map of raw, byte array parameters.
+     */
     // TODO Should we use MessageParameters here instead?
     public final ImmutableMap<String, byte[]> parameters;
 
-    private OSSMessageHeader(Builder builder)
+    /**
+     * Creates a new message header with the given parameters
+     */
+    public static OSSMessageHeader from(MessagingVersion messagingVersion,
+                                        int messageId,
+                                        int timestampLoBits,
+                                        InetAddress from,
+                                        OSSVerb verb,
+                                        int payloadSize,
+                                        int parameterCount,
+                                        Map<String, byte[]> parameters)
     {
-        this.messagingVersion = builder.messagingVersion;
-        this.messageId = builder.messageId;
-        this.timestampLoBits = builder.timestampLoBits;
-        this.from = builder.from;
-        this.verb = builder.verb;
-        this.payloadSize = builder.payloadSize;
-        this.parameterCount = builder.parameterCount;
-        this.parameters = ImmutableMap.copyOf(builder.parameters);
+        OSSMessageHeader header = new OSSMessageHeader(messagingVersion,
+                                                       messageId,
+                                                       timestampLoBits,
+                                                       from,
+                                                       verb,
+                                                       payloadSize,
+                                                       parameterCount,
+                                                       parameters);
+        return header;
     }
 
-    public static class Builder
+    private OSSMessageHeader(MessagingVersion messagingVersion,
+                            int messageId,
+                            int timestampLoBits,
+                            InetAddress from,
+                            OSSVerb verb,
+                            int payloadSize,
+                            int parameterCount,
+                            Map<String, byte[]> parameters)
     {
-        private final MessagingVersion messagingVersion;
-        private int messageId;
-        private int timestampLoBits;
-        private InetAddress from;
-        private OSSVerb verb;
-        private int payloadSize;
-        private int parameterCount;
-        private Map<String, byte[]> parameters;
-
-        public Builder(MessagingVersion messagingVersion)
-        {
-            this.messagingVersion = messagingVersion;
-        }
-
-        public Builder setMessageId(int messageId)
-        {
-            this.messageId = messageId;
-            return this;
-        }
-
-        public Builder setTimestampLoBits(int timestampLoBits)
-        {
-            this.timestampLoBits = timestampLoBits;
-            return this;
-        }
-
-        public Builder setFrom(InetAddress from)
-        {
-            this.from = from;
-            return this;
-        }
-
-        public Builder setVerb(OSSVerb verb)
-        {
-            this.verb = verb;
-            return this;
-        }
-
-        public Builder setPayloadSize(int payloadSize)
-        {
-            this.payloadSize = payloadSize;
-            return this;
-        }
-
-        public Builder setParameterCount(int parameterCount)
-        {
-            this.parameterCount = parameterCount;
-            return this;
-        }
-
-        public Builder setParameters(Map<String, byte[]> parameters)
-        {
-            this.parameters = parameters;
-            return this;
-        }
-
-        public OSSMessageHeader build()
-        {
-            return new OSSMessageHeader(this);
-        }
+        this.messagingVersion = messagingVersion;
+        this.messageId = messageId;
+        this.timestampLoBits = timestampLoBits;
+        this.from = from;
+        this.verb = verb;
+        this.payloadSize = payloadSize;
+        this.parameterCount = parameterCount;
+        this.parameters = ImmutableMap.copyOf(parameters);
     }
+    
 }
