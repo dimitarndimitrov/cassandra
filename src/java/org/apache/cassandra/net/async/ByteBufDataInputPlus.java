@@ -22,6 +22,9 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufInputStream;
 import org.apache.cassandra.io.util.DataInputPlus;
 
+/**
+ * A {@link DataInputPlus} that uses a {@link ByteBuf} as a backing buffer.
+ */
 public class ByteBufDataInputPlus extends ByteBufInputStream implements DataInputPlus
 {
     public ByteBufDataInputPlus(ByteBuf buffer)

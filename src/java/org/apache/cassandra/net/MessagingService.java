@@ -121,7 +121,7 @@ public final class MessagingService implements MessagingServiceMBean
 
     private final List<ILatencySubscriber> subscribers = new ArrayList<>();
 
-    // protocol versions of the other nodes in the cluster
+    // Messaging versions of the other nodes in the cluster
     private final ConcurrentMap<InetAddress, MessagingVersion> versions = new NonBlockingHashMap<>();
 
     // back-pressure implementation
@@ -240,8 +240,6 @@ public final class MessagingService implements MessagingServiceMBean
         for (Request<?, Q> request : dispatcher.remoteRequests())
             send(request, callback);
 
-        // Note that it's important that local delivery is done _after_ sending the other request, because if the are
-        // already on the right thread, said local delivery will be done inline.
         if (dispatcher.hasLocalRequest())
             deliverLocally(dispatcher.localRequest(), callback);
     }
@@ -249,9 +247,8 @@ public final class MessagingService implements MessagingServiceMBean
     private <P, Q> void deliverLocally(Request<P, Q> request, MessageCallback<Q> callback)
     {
         Consumer<Response<Q>> handleResponse = response ->
-                                               request.responseExecutor()
-                                                      .execute(() -> deliverLocalResponse(request, response, callback),
-                                                               ExecutorLocals.create());
+                                               request.responseExecutor().execute(() -> deliverLocalResponse(request, response, callback),
+                                                                                  ExecutorLocals.create());
 
         Consumer<Response<Q>> onResponse = messageInterceptors.isEmpty()
                                            ? handleResponse
@@ -363,8 +360,6 @@ public final class MessagingService implements MessagingServiceMBean
         for (OneWayRequest<?> request : dispatcher.remoteRequests())
             sendRequest(request, null);
 
-        // Note that it's important that local delivery is done _after_ sending the other request, because if the are
-        // already on the right thread, said local delivery will be done inline.
         if (dispatcher.hasLocalRequest())
             deliverLocallyOneWay(dispatcher.localRequest());
     }
@@ -398,10 +393,6 @@ public final class MessagingService implements MessagingServiceMBean
         if (logger.isTraceEnabled())
             logger.trace("Sending {}", message);
 
-        // TODO Refactor getMessagingConnection to return CompletableFuture and change its usages accordingly.
-//        OutboundMessagingPool outboundMessagingPool = getMessagingConnection(message.to());
-//        if (outboundMessagingPool != null)
-//            outboundMessagingPool.sendMessage(message, message.id());
         return getMessagingConnection(message.to()).thenAccept(mc -> mc.sendMessage(message, message.id()));
     }
 
@@ -409,8 +400,9 @@ public final class MessagingService implements MessagingServiceMBean
                                                                         Consumer<M> consumer,
                                                                         MessageCallback<Q> callback)
     {
-        Consumer<M> delivery = rq -> rq.requestExecutor().execute(() -> consumer.accept(rq), ExecutorLocals.create());
-        messageInterceptors.interceptRequest(request, delivery, callback);
+        messageInterceptors.interceptRequest(request,
+                                             rq -> rq.requestExecutor().execute(() -> consumer.accept(rq), ExecutorLocals.create()),
+                                             callback);
     }
 
     /**
@@ -744,19 +736,18 @@ public final class MessagingService implements MessagingServiceMBean
 
     private <P, Q> void receiveRequestInternal(Request<P, Q> request, ExecutorLocals locals)
     {
-        request.requestExecutor().execute(  MessageDeliveryTask.forRequest(request), locals);
+        request.requestExecutor().execute(MessageDeliveryTask.forRequest(request), locals);
     }
 
     private <Q> void receiveResponseInternal(Response<Q> response, ExecutorLocals locals)
     {
         CallbackInfo<Q> info = getRegisteredCallback(response, false);
-
         // Ignore expired callback info (we already logged in getRegisteredCallback)
         if (info != null)
             info.responseExecutor.execute(MessageDeliveryTask.forResponse(response), locals);
     }
 
-    // Only required by legacy serialization. Can inline in following method when we get rid of that.
+    // Only required by legacy serialization. Can inline in following metho when we get rid of that.
     CallbackInfo<?> getRegisteredCallback(int id, boolean remove, InetAddress from)
     {
         ExpiringMap.CacheableObject<CallbackInfo<?>> cObj = remove ? callbacks.remove(id) : callbacks.get(id);
@@ -860,7 +851,6 @@ public final class MessagingService implements MessagingServiceMBean
         droppedMessages.onDroppedMessage(message);
     }
 
-
     private void updateDroppedMutationCount(IMutation mutation)
     {
         assert mutation != null : "Mutation should not be null when updating dropped mutations count";
@@ -874,8 +864,6 @@ public final class MessagingService implements MessagingServiceMBean
             }
         }
     }
-
-
 
     private static void handleIOExceptionOnClose(IOException e) throws IOException
     {

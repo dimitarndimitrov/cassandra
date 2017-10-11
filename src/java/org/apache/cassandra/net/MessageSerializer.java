@@ -58,7 +58,7 @@ class MessageSerializer implements Message.Serializer
 
     MessageSerializer(MessagingVersion version, long timestampBaseMillis)
     {
-        assert version.isDSE(); // LegacyMessageSerializer should be used instead
+        assert version != null && version.isDSE(); // OSSMessageSerializer should be used instead
         this.version = version;
         this.timestampBaseMillis = timestampBaseMillis;
     }

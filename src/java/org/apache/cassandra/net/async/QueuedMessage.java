@@ -31,6 +31,7 @@ import org.apache.cassandra.utils.CoalescingStrategies;
 public class QueuedMessage implements CoalescingStrategies.Coalescable
 {
     public final Message<?> message;
+    // TODO Remove this and use message.id() instead.
     public final int id;
     public final long timestampNanos;
     private final boolean retryable;

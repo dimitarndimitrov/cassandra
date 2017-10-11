@@ -118,6 +118,8 @@ public class HandshakeProtocol
             MessagingService.validateMagic(in.readInt());
             int flags = in.readInt();
             ProtocolVersion protocolVersion = ProtocolVersion.fromProtocolHeader(flags);
+            // TODO Encapsulate all the flag decoding into the construction of ProtocolVersion, and pass only that
+            // ProtocolVersion instance as the sole argument of the FirstHandshakeMessage ctor.
             NettyFactory.Mode mode = MessagingService.getBits(flags, 3, 1) == 1
                                      ? NettyFactory.Mode.STREAMING
                                      : NettyFactory.Mode.MESSAGING;
@@ -133,7 +135,7 @@ public class HandshakeProtocol
 
             FirstHandshakeMessage that = (FirstHandshakeMessage)other;
             return this.version.equals(that.version)
-                   && this.mode == that.mode
+                   && this.mode.equals(that.mode)
                    && this.compressionEnabled == that.compressionEnabled;
         }
 

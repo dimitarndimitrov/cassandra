@@ -126,6 +126,7 @@ public final class NettyFactory
         this.useEpoll = useEpoll;
         acceptGroup = getEventLoopGroup(useEpoll, determineAcceptGroupSize(DatabaseDescriptor.getServerEncryptionOptions().internode_encryption),
                                         "MessagingService-NettyAcceptor-Threads", false);
+        // TODO Wire at least the inbound events, but also probably the others to use the TPC event loops.
         inboundGroup = getEventLoopGroup(useEpoll, FBUtilities.getAvailableProcessors(), "MessagingService-NettyInbound-Threads", false);
         outboundGroup = getEventLoopGroup(useEpoll, FBUtilities.getAvailableProcessors(), "MessagingService-NettyOutbound-Threads", true);
     }

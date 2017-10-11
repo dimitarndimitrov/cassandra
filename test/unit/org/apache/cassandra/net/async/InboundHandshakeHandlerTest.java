@@ -49,8 +49,8 @@ import org.apache.cassandra.net.async.InboundHandshakeHandler.State;
 
 import static org.apache.cassandra.net.async.NettyFactory.Mode.MESSAGING;
 
-// TODO Duplicate most if not all of these tests with a DSE version (hitting the new messaging protocol and code paths),
-// and with an OSS version (hitting the old messaging protocol and code paths)
+// TODO Figure out if we need to have these tests run with MessagingService.current_version modified, and with
+// CURRENT_VERSION modified to be something else that MessagingService.current_version.
 public class InboundHandshakeHandlerTest
 {
     private static final InetSocketAddress addr = new InetSocketAddress("127.0.0.1", 0);
@@ -295,18 +295,19 @@ public class InboundHandshakeHandlerTest
         Assert.assertTrue(channel.isOpen());
     }
 
-    // TODO Having this here is not really correct - it should be abstracted away by ProtocolVersion.
+    // TODO Maybe abstract this in some ProtocolVersion utility method?
     private int modifyHandshakeVersion(int handshakeVersion, int versionModifier)
     {
-        int resultingVersion = 0;
         if (handshakeVersion < 256)
         {
-            resultingVersion = Math.min(255, handshakeVersion + versionModifier);
+            handshakeVersion = Math.max(0, Math.min(255, handshakeVersion + versionModifier));
         }
         else
         {
-            resultingVersion = (((handshakeVersion >>> 8) + versionModifier) << 8) + 255;
+            handshakeVersion >>>= 8;
+            handshakeVersion = Math.max(0, Math.min(255, handshakeVersion + versionModifier));
+            handshakeVersion <<= 8;
         }
-        return resultingVersion;
+        return handshakeVersion;
     }
 }

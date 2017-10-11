@@ -46,12 +46,14 @@ import org.apache.cassandra.net.OSSVerb;
 import org.apache.cassandra.net.ProtocolVersion;
 
 /**
- * Parses out individual messages from the incoming buffers. Each message, both header and payload, is incrementally
- * built up from the available input data, then passed to the {@link #messageConsumer}.
+ * A Netty inbound handler for messages coming through the OSS-specific protocol.
  *
- * Note: this class derives from {@link ByteToMessageDecoder} to take advantage of the {@link ByteToMessageDecoder.Cumulator}
+ * <p>It parses out individual messages from the incoming buffers. Each message, both header and payload, is incrementally
+ * built up from the available input data, then passed to a pre-configured {@link Consumer} for {@link Message}s.</p>
+ *
+ * <p>Note: this class derives from {@link ByteToMessageDecoder} to take advantage of the {@link ByteToMessageDecoder.Cumulator}
  * behavior across {@link #decode(ChannelHandlerContext, ByteBuf, List)} invocations. That way we don't have to maintain
- * the not-fully consumed {@link ByteBuf}s.
+ * the not-fully consumed {@link ByteBuf}s.</p>
  */
 class OSSInboundMessageHandler extends ByteToMessageDecoder
 {
@@ -84,15 +86,25 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
     private static final int SECOND_SECTION_BYTE_COUNT = 8;
 
     private final InetAddress peer;
+    /**
+     * Should be OSS-specific protocol version.
+     */
     private final ProtocolVersion protocolVersion;
-
     /**
      * Abstracts out depending directly on {@link MessagingService#receive(Message)}; this makes tests more sane
      * as they don't require nor trigger the entire message processing circus.
      */
     private final Consumer<Message<?>> messageConsumer;
 
+    /* Mutable intermediary state used during the consumption of each single message. */
+
+    /**
+     * The current state in the consumption of the current message.
+     */
     private State state;
+    /**
+     * The header data consumed so far for the current message.
+     */
     private HeaderData headerData;
 
     OSSInboundMessageHandler(InetAddress peer, ProtocolVersion protocolVersion)
@@ -102,6 +114,7 @@ class OSSInboundMessageHandler extends ByteToMessageDecoder
 
     OSSInboundMessageHandler(InetAddress peer, ProtocolVersion protocolVersion, Consumer<Message<?>> messageConsumer)
     {
+        assert !protocolVersion.isDSE;
         this.peer = peer;
         this.protocolVersion = protocolVersion;
         this.messageConsumer = messageConsumer;

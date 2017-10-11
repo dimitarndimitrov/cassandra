@@ -38,13 +38,16 @@ import org.apache.cassandra.net.MessagingVersion;
 import org.apache.cassandra.net.ProtocolVersion;
 
 /**
- * TODO
+ * A Netty inbound handler for messages coming through the DSE-specific protocol introduced with APOLLO-497.
  */
 class InboundMessageHandler extends ByteToMessageDecoder
 {
-    public static final Logger logger = LoggerFactory.getLogger(InboundMessageHandler.class);
+    private static final Logger logger = LoggerFactory.getLogger(InboundMessageHandler.class);
 
     private final InetAddress peer;
+    /**
+     * Should be DSE-specific protocol version.
+     */
     private final ProtocolVersion protocolVersion;
     /**
      * Abstracts out depending directly on {@link MessagingService#receive(Message)}; this makes tests more sane
@@ -52,10 +55,17 @@ class InboundMessageHandler extends ByteToMessageDecoder
      */
     private final Consumer<Message<?>> messageConsumer;
 
+    /* Mutable intermediary state used during the consumption of each single message. */
+
     /**
-     * TODO
+     * The size of the currently consumed message, if we're in the process of consuming a message, or -1, if we're
+     * waiting for a new message to arrive.
      */
-    private int currentFrameSize = -1;
+    private int currentMessageSize = -1;
+    /**
+     * Used for deserializing the received bytes into a {@link Message}.
+     */
+    private Message.Serializer serializer = null;
 
     InboundMessageHandler(InetAddress peer, ProtocolVersion protocolVersion)
     {
@@ -64,29 +74,41 @@ class InboundMessageHandler extends ByteToMessageDecoder
 
     InboundMessageHandler(InetAddress peer, ProtocolVersion protocolVersion, Consumer<Message<?>> messageConsumer)
     {
-        ProtocolVersion minVersion = MessagingVersion.DSE_60.protocolVersion();
-        assert protocolVersion.isDSE && protocolVersion.compareTo(minVersion) >= 0;
+        assert protocolVersion.isDSE;
         this.peer = peer;
         this.protocolVersion = protocolVersion;
         this.messageConsumer = messageConsumer;
     }
 
+    @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> list) throws Exception
     {
         ByteBufDataInputPlus inputPlus = new ByteBufDataInputPlus(in);
         try
         {
-            if (currentFrameSize < 0)
-                currentFrameSize = in.readInt();
-            // TODO Figure out if we need to correct for the read size (e.g. readableBytes < currentFrameSize - 4).
-            if (in.readableBytes() < currentFrameSize)
+            // Check if we are in the process of reading a message.
+            if (currentMessageSize < 0)
+            {
+                // We aren't and there's a new message - we should at least be able to read its serialized size.
+                if (in.readableBytes() < 4)
+                    return;
+                // Create a serializer and deserialize the message size (in order to wait for that many bytes).
+                serializer = Message.createSerializer(MessagingVersion.from(protocolVersion),
+                                                      ApproximateTime.currentTimeMillis());
+                currentMessageSize = serializer.readSerializedSize(inputPlus);
+                if (currentMessageSize < 0)
+                    throw new IOException("Invalid message serialized size header: " + currentMessageSize + " with protocol version " + protocolVersion);
+            }
+            if (in.readableBytes() < currentMessageSize)
                 return;
-            Message.Serializer serializer = Message.createSerializer(MessagingVersion.from(protocolVersion),
-                                                                     // TODO Figure out if the message-serialized timestamp should be used here.
-                                                                     // See https://github.com/riptano/apollo/commit/3d4840ecc5838d0e12a5488b9c9b9c3b2e026dad#diff-6b0e578d46ab48563b955c4aa6917f2aR159
-                                                                     ApproximateTime.currentTimeMillis());
-            Message<Object> messageIn = serializer.deserialize(inputPlus, peer);
-            currentFrameSize = -1;
+
+            assert serializer != null;
+            Message<Object> message = serializer.deserialize(inputPlus, peer);
+            messageConsumer.accept(message);
+
+            // Once a message has been fully consumed, reset the intermediary state.
+            currentMessageSize = -1;
+            serializer = null;
         }
         catch (Exception e)
         {

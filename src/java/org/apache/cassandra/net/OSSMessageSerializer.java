@@ -115,6 +115,7 @@ public class OSSMessageSerializer implements Message.Serializer
 
     OSSMessageSerializer(MessagingVersion version)
     {
+        assert version != null && !version.isDSE();
         this.version = version;
     }
 
@@ -128,9 +129,7 @@ public class OSSMessageSerializer implements Message.Serializer
     public int readSerializedSize(DataInputPlus in) throws IOException
     {
         // The legacy protocol doesn't write the serialized size upfront
-        // TODO: returning a bogus value is definitively dodgy. This isn't really used until CASSANDRA-8457 and that
-        // code will change then to accomodate this later. Keeping it simple right now.
-        return -1;
+        throw new UnsupportedOperationException("Message serialized size header is unavailable in protocol version " + version.protocolVersion());
     }
 
     @SuppressWarnings("unchecked")

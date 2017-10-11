@@ -17,6 +17,8 @@
  */
 package org.apache.cassandra.net;
 
+import org.apache.cassandra.net.async.NettyFactory;
+
 public class ProtocolVersion implements Comparable<ProtocolVersion>
 {
     public final boolean isDSE;
@@ -60,9 +62,6 @@ public class ProtocolVersion implements Comparable<ProtocolVersion>
     static ProtocolVersion dse(int version)
     {
         assert version < 256;
-        // TODO Consider making the DSE handshake version the actual value that needs to be written in the raw protocol
-        // header. What we are using right now (version << 8) is neither what actually goes through the wire, nor what
-        // is being considered the actual DSE version after unpacking the raw protocol header bits.
         return new ProtocolVersion(true, version, (version << 24) | (0xFF << 8), version << 8);
     }
 
@@ -108,11 +107,7 @@ public class ProtocolVersion implements Comparable<ProtocolVersion>
     {
         if (handshakeVersion < 256)
             return oss(handshakeVersion);
-        // TODO Consider making the DSE handshake version the actual value that needs to be written in the raw protocol
-        // header. What we are using right now (version << 8) is neither what actually goes through the wire, nor what
-        // is being considered the actual DSE version after unpacking the raw protocol header bits.
-        // assert (handshakeVersion & 255) == 255;
-        handshakeVersion = handshakeVersion >>> 8;
+        handshakeVersion >>>= 8;
         assert handshakeVersion < 256;
         return dse(handshakeVersion);
     }

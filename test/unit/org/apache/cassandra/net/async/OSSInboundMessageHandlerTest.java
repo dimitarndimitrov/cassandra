@@ -22,8 +22,6 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -40,12 +38,11 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.monitoring.ApproximateTime;
+import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.EmptyPayload;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessageParameters;
-import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.MessagingVersion;
-import org.apache.cassandra.net.OSSMessageHeader;
 import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.net.Verbs;
 
@@ -53,8 +50,6 @@ public class OSSInboundMessageHandlerTest
 {
     private static final InetSocketAddress addr = new InetSocketAddress("127.0.0.1", 0);
     private static final ProtocolVersion CURRENT_VERSION = MessagingVersion.OSS_40.protocolVersion();
-
-    private static final int MSG_ID = 42;
 
     private ByteBuf buf;
 
@@ -128,12 +123,16 @@ public class OSSInboundMessageHandlerTest
         return wrapper.message;
     }
 
-    private void serialize(Message<?> outMsg) throws IOException
+    private void serialize(Message<?> outboundMessage) throws IOException
     {
         buf = Unpooled.buffer(1024, 1024); // 1k should be enough for everybody!
         Message.Serializer serializer = Message.createSerializer(MessagingVersion.from(CURRENT_VERSION),
                                                                  ApproximateTime.currentTimeMillis());
-        serializer.serialize(outMsg, new ByteBufDataOutputPlus(buf));
+        long serializedSize = serializer.serializedSize(outboundMessage);
+        Assert.assertTrue(serializedSize <= Integer.MAX_VALUE);
+        DataOutputPlus outputPlus = new ByteBufDataOutputPlus(buf);
+        serializer.writeSerializedSize((int) serializedSize, outputPlus);
+        serializer.serialize(outboundMessage, outputPlus);
     }
 
     @Test

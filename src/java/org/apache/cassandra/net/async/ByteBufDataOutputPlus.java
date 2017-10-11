@@ -54,7 +54,7 @@ public class ByteBufDataOutputPlus extends ByteBufOutputStream implements DataOu
     /**
      * {@inheritDoc} - "write the buffer without modifying its position"
      *
-     * Unfortunately, netty's {@link ByteBuf#writeBytes(ByteBuffer)} modifies the byteBuffer's position,
+     * Unfortunately, Netty's {@link ByteBuf#writeBytes(ByteBuffer)} modifies the ByteBuffer's position,
      * and that is unsafe in our world wrt multithreading. Hence we need to be careful: reference the backing array
      * on heap ByteBuffers, and use a reusable "hollow" ByteBuffer ({@link #hollowBuffer}) for direct ByteBuffers.
      */

@@ -190,8 +190,8 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
             if (version.compareTo(MessagingService.current_version.protocolVersion()) > 0)
             {
                 logger.info("peer wants to use a protocol version higher ({}) than what this node supports ({})",
-                            version.handshakeVersion,
-                            MessagingService.current_version.protocolVersion().handshakeVersion);
+                            version,
+                            MessagingService.current_version.protocolVersion());
                 ctx.close();
                 return State.HANDSHAKE_FAIL;
             }
@@ -224,8 +224,8 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
         if (maxVersion.compareTo(MessagingService.current_version.protocolVersion()) > 0)
         {
             logger.error("peer wants to use a protocol version higher ({}) than what this node supports ({})",
-                         maxVersion.handshakeVersion,
-                         MessagingService.current_version.protocolVersion().handshakeVersion);
+                         maxVersion,
+                         MessagingService.current_version.protocolVersion());
             ctx.close();
             return State.HANDSHAKE_FAIL;
         }
@@ -235,8 +235,8 @@ class InboundHandshakeHandler extends ByteToMessageDecoder
         MessagingService.instance().setVersion(peer, MessagingVersion.from(maxVersion));
         logger.trace("Set version for {} to {} (will use {})",
                      peer,
-                     maxVersion.handshakeVersion,
-                     MessagingService.instance().getVersion(peer).protocolVersion().handshakeVersion);
+                     maxVersion,
+                     MessagingService.instance().getVersion(peer).protocolVersion());
         version = maxVersion;
 
         setupMessagingPipeline(ctx.pipeline(), peer, compressed, version);
