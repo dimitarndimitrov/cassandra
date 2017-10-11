@@ -20,6 +20,7 @@ package org.apache.cassandra.db;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
@@ -30,9 +31,10 @@ import org.slf4j.LoggerFactory;
 
 import io.reactivex.functions.Function;
 import org.apache.cassandra.net.Request;
+import org.apache.cassandra.utils.btree.BTree;
 import org.apache.cassandra.utils.flow.Flow;
 import io.reactivex.Single;
-import org.apache.cassandra.concurrent.Scheduleable;
+import org.apache.cassandra.concurrent.Schedulable;
 import org.apache.cassandra.config.*;
 import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.selection.ResultBuilder;
@@ -64,7 +66,7 @@ import org.apache.cassandra.utils.versioning.VersionDependent;
  * <p>
  * This contains all the information needed to do a local read.
  */
-public abstract class ReadCommand implements ReadQuery, Scheduleable
+public abstract class ReadCommand implements ReadQuery, Schedulable
 {
     protected static final Logger logger = LoggerFactory.getLogger(ReadCommand.class);
 
@@ -114,6 +116,8 @@ public abstract class ReadCommand implements ReadQuery, Scheduleable
 
     protected abstract void serializeSelection(DataOutputPlus out, ReadVersion version) throws IOException;
     protected abstract long selectionSerializedSize(ReadVersion version);
+
+    public abstract boolean isLimitedToOnePartition();
 
     public abstract Request.Dispatcher<? extends ReadCommand, ReadResponse> dispatcherTo(Collection<InetAddress> endpoints);
     public abstract Request<? extends ReadCommand, ReadResponse> requestTo(InetAddress endpoint);
@@ -446,20 +450,19 @@ public abstract class ReadCommand implements ReadQuery, Scheduleable
 
             public void countRow(Row row)
             {
-                boolean hasLiveCells = false;
-                for (Cell cell : row.cells())
-                {
-                    if (!cell.isLive(ReadCommand.this.nowInSec()))
+                Boolean hasLiveCells = row.reduceCells(Boolean.FALSE, (ret, cell) -> {
+                    if (!cell.isLive(nowInSec))
+                    {
                         countTombstone(row.clustering());
-                    else if (!hasLiveCells)
-                        hasLiveCells = true;
-                }
+                        return ret;
+                    }
+
+                    return Boolean.TRUE; // cell is live
+                });
 
                 /**
                  * This duplicates the logic of {@link AbstractRow#hasLiveData(int, boolean)} to avoid
-                 * iterating twice on the cells since this is GC-intensive. Please change this whenever
-                 * changing that.
-                 * TODO: unify the logic in a performant way
+                 * iterating twice on the cells since it is inefficient.
                  */
                 if ((hasLiveCells && !enforceStrictLiveness) || row.primaryKeyLivenessInfo().isLive(nowInSec))
                     ++liveRows;

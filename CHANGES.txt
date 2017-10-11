@@ -1,7 +1,15 @@
 4.0
  * Use netty for internode messaging (CASSANDRA-8457)
+ * Add incremental repair support for --hosts, --force, and subrange repair (CASSANDRA-13818)
+ * Refactor GcCompactionTest to avoid boxing (CASSANDRA-13941)
+ * Checksum sstable metadata (CASSANDRA-13321)
+ * Expose recent histograms in JmxHistograms (CASSANDRA-13642)
+ * Add SERIAL and LOCAL_SERIAL support for cassandra-stress (CASSANDRA-13925)
+ * LCS needlessly checks for L0 STCS candidates multiple times (CASSANDRA-12961)
+ * Correctly close netty channels when a stream session ends (CASSANDRA-13905)
+ * Update lz4 to 1.4.0 (CASSANDRA-13741)
+ * Throttle base partitions during MV repair streaming to prevent OOM (CASSANDRA-13299)
  * Improve short read protection performance (CASSANDRA-13794)
- * Add command line tool for NodeSync (APOLLO-948)
  * Fix AssertionError in short read protection (CASSANDRA-13747)
  * Use compaction threshold for STCS in L0 (CASSANDRA-13861)
  * Fix problem with min_compress_ratio: 1 and disallow ratio < 1 (CASSANDRA-13703)
@@ -132,6 +140,14 @@
  * Switch to client init for sstabledump (CASSANDRA-13683)
  * CQLSH: Don't pause when capturing data (CASSANDRA-13743)
 
+
+3.11.2
+ * Avoid locks when checking LCS fanout and if we should defrag (CASSANDRA-13930)
+Merged from 3.0:
+ * Mishandling of cells for removed/dropped columns when reading legacy files (CASSANDRA-13939)
+ * Deserialise sstable metadata in nodetool verify (CASSANDRA-13922)
+
+
 3.11.1
  * Fix the computation of cdc_total_space_in_mb for exabyte filesystems (CASSANDRA-13808)
  * AbstractTokenTreeBuilder#serializedSize returns wrong value when there is a single leaf and overflow collisions (CASSANDRA-13869)
@@ -145,6 +161,11 @@
  * Duplicate the buffer before passing it to analyser in SASI operation (CASSANDRA-13512)
  * Properly evict pstmts from prepared statements cache (CASSANDRA-13641)
 Merged from 3.0:
+ * Improve TRUNCATE performance (CASSANDRA-13909)
+ * Implement short read protection on partition boundaries (CASSANDRA-13595)
+ * Fix ISE thrown by UPI.Serializer.hasNext() for some SELECT queries (CASSANDRA-13911)
+ * Filter header only commit logs before recovery (CASSANDRA-13918)
+ * AssertionError prepending to a list (CASSANDRA-13149)
  * Handle limit correctly on tables with strict liveness (CASSANDRA-13883)
  * Remove non-rpc-ready nodes from counter leader candidates (CASSANDRA-13043)
  * Fix sstable reader to support range-tombstone-marker for multi-slices (CASSANDRA-13787)
@@ -240,6 +261,7 @@ Merged from 2.1:
  * Fix cqlsh automatic protocol downgrade regression (CASSANDRA-13307)
  * Tracing payload not passed from QueryMessage to tracing session (CASSANDRA-12835)
 Merged from 3.0:
+ * Filter header only commit logs before recovery (CASSANDRA-13918)
  * Fix MV timestamp issues (CASSANDRA-11500)
  * Ensure int overflow doesn't occur when calculating large partition warning size (CASSANDRA-13172)
  * Ensure consistent view of partition columns between coordinator and replica in ColumnFilter (CASSANDRA-13004)

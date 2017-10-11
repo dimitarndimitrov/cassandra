@@ -19,6 +19,7 @@ package org.apache.cassandra.concurrent;
 
 import java.util.Queue;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -67,13 +68,13 @@ import io.reactivex.internal.disposables.EmptyDisposable;
 public class IOScheduler extends StagedScheduler
 {
     @VisibleForTesting
-    static final int MIN_POOL_SIZE = Integer.valueOf(System.getProperty("cassandra.io.sched.min_pool_size", "8"));
+    static final int MIN_POOL_SIZE = Integer.valueOf(System.getProperty("dse.io.sched.min_pool_size", "8"));
 
     @VisibleForTesting
-    public static final int MAX_POOL_SIZE = Integer.valueOf(System.getProperty("cassandra.io.sched.max_pool_size", "256"));
+    public static final int MAX_POOL_SIZE = Integer.valueOf(System.getProperty("dse.io.sched.max_pool_size", "256"));
 
     @VisibleForTesting
-    static final int KEEP_ALIVE_TIME_SECS = Integer.valueOf(System.getProperty("cassandra.io.sched.keep_alive_secs", "5"));
+    static final int KEEP_ALIVE_TIME_SECS = Integer.valueOf(System.getProperty("dse.io.sched.keep_alive_secs", "5"));
 
     private final Function<ThreadFactory, ExecutorBasedWorker> workerSupplier;
     private final AtomicReference<WorkersPool> pool;
@@ -91,9 +92,14 @@ public class IOScheduler extends StagedScheduler
         this.pool = new AtomicReference<>(new WorkersPool(workerSupplier));
     }
 
-    public void execute(Runnable runnable, ExecutorLocals locals, TPCTaskType stage)
+    public int metricsCoreId()
     {
-        ((PooledWorker)createWorker()).execute(new TPCRunnable(runnable, locals, stage, TPC.getNumCores()));
+        return TPC.getNumCores();
+    }
+
+    public void enqueue(TPCRunnable runnable)
+    {
+        ((PooledWorker)createWorker()).execute(runnable);
     }
 
     @Override
@@ -187,7 +193,7 @@ public class IOScheduler extends StagedScheduler
         {
             this.threadFactory = new IOThread.Factory();
             this.workerSupplier = workerSupplier;
-            this.workersQueue = new ArrayBlockingQueue<>(MAX_POOL_SIZE);
+            this.workersQueue = new LinkedBlockingQueue<>(MAX_POOL_SIZE);
             this.allWorkers = new CompositeDisposable();
             this.shutdown = new AtomicBoolean(false);
         }

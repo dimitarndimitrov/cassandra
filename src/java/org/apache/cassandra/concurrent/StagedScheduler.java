@@ -33,8 +33,6 @@ public abstract class StagedScheduler extends Scheduler
 {
     private final EnumMap<TPCTaskType, TracingAwareExecutor> executorsForTaskType = new EnumMap<>(TPCTaskType.class);
 
-    public abstract void execute(Runnable runnable, ExecutorLocals locals, TPCTaskType stage);
-
     public abstract Disposable scheduleDirect(Runnable run, TPCTaskType stage, long delay, TimeUnit unit);
 
     /**
@@ -47,6 +45,23 @@ public abstract class StagedScheduler extends Scheduler
      */
     public abstract boolean isOnScheduler(Thread thread);
 
+    public abstract int metricsCoreId();
+
+    public abstract void enqueue(TPCRunnable runnable);
+
+    public void execute(TPCRunnable runnable)
+    {
+        if (isOnScheduler(Thread.currentThread()))
+            runnable.run();
+        else
+            enqueue(runnable);
+    }
+
+    public void execute(Runnable runnable, ExecutorLocals locals, TPCTaskType stage)
+    {
+        execute(TPCRunnable.wrap(runnable, locals, stage, metricsCoreId()));
+    }
+
     /**
      * Returns an executor that assigns the given task type to the runnables it receives.
      */
@@ -58,10 +73,12 @@ public abstract class StagedScheduler extends Scheduler
 
         synchronized (executorsForTaskType)
         {
-            return executorsForTaskType.computeIfAbsent(type,
-                                                        s -> (runnable, locals) -> execute(runnable,
-                                                                                           locals,
-                                                                                           s));
+            return executorsForTaskType.computeIfAbsent(type, this::makeExecutor);
         }
+    }
+
+    private TracingAwareExecutor makeExecutor(TPCTaskType type)
+    {
+        return (runnable, locals) -> execute(runnable, locals, type);
     }
 }

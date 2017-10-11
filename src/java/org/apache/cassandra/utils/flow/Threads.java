@@ -136,7 +136,7 @@ public class Threads
 
     private static Flow.Operator<Object, Object> constructRequestOnIO(TPCTaskType stage)
     {
-        return (source, subscriber, subscriptionRecepient) -> new RequestOn(source, subscriber, subscriptionRecepient, TPC.ioScheduler(), stage);
+        return (source, subscriber, subscriptionRecipient) -> new RequestOn(source, subscriber, subscriptionRecipient, TPC.ioScheduler(), stage);
     }
 
     /**
@@ -181,7 +181,7 @@ public class Threads
 
         public void requestNext()
         {
-            subscriber.onComplete();
+            subscriber.onError(new AssertionError("requestNext called after onFinal"));
         }
 
         public void run()
@@ -189,7 +189,7 @@ public class Threads
             try
             {
                 T v = source.call();
-                subscriber.onNext(v);
+                subscriber.onFinal(v);
             }
             catch (Throwable t)
             {
@@ -299,5 +299,61 @@ public class Threads
     public static <T> Flow<T> deferOnIO(Callable<Flow<T>> source, TPCTaskType stage)
     {
         return new DeferOn<>(source, TPC.ioScheduler(), stage);
+    }
+
+    /**
+     * Op for applying any other subsequent operations/transformations on a (potentially) different scheduler.
+     */
+    static class SchedulingTransformer<I> extends FlowTransformNext<I, I>
+    {
+        final StagedScheduler scheduler;
+        final TPCTaskType taskType;
+        final ExecutorLocals locals = ExecutorLocals.create();
+
+        public SchedulingTransformer(Flow<I> source, StagedScheduler scheduler, TPCTaskType taskType)
+        {
+            super(source);
+            this.scheduler = scheduler;
+            this.taskType = taskType;
+        }
+
+        @Override
+        public void onNext(I next)
+        {
+            if (TPC.isOnScheduler(scheduler))
+                subscriber.onNext(next);
+            else
+                scheduler.execute(() -> subscriber.onNext(next), locals, taskType);
+        }
+
+
+        @Override
+        public void onFinal(I next)
+        {
+            if (TPC.isOnScheduler(scheduler))
+                subscriber.onFinal(next);
+            else
+                scheduler.scheduleDirect(new TaggedRunnable.Base(taskType, scheduler)
+                {
+                    public void run()
+                    {
+                        subscriber.onFinal(next);
+                    }
+                });
+        }
+
+        public String toString()
+        {
+            return formatTrace(getClass().getSimpleName(), scheduler, sourceFlow);
+        }
+    }
+
+    /**
+     * Applies any subsequent transformations (i.e. map, reduce...) on the given scheduler
+     * (similarly to RxJava's observeOn()).
+     */
+    public static <T> Flow<T> observeOn(Flow<T> source, StagedScheduler scheduler, TPCTaskType taskType)
+    {
+        return new SchedulingTransformer<>(source, scheduler, taskType);
     }
 }

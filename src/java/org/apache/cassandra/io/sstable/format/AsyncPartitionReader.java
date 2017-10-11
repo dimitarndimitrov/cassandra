@@ -32,6 +32,7 @@ import org.apache.cassandra.db.rows.FlowableUnfilteredPartition;
 import org.apache.cassandra.db.rows.PartitionHeader;
 import org.apache.cassandra.db.rows.SerializationHelper;
 import org.apache.cassandra.db.rows.Unfiltered;
+import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.io.sstable.RowIndexEntry;
 import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.io.util.Rebufferer.NotInCacheException;
@@ -69,38 +70,77 @@ class AsyncPartitionReader
     final boolean reverse;
     final ReaderConstraint rc;
     final SerializationHelper helper;
+    final boolean closeDataFile;
     Slices slices;
 
     volatile RowIndexEntry indexEntry = null;
     volatile FileDataInput dfile = null;
-    volatile AbstractSSTableIterator ssTableIterator = null;
+    volatile UnfilteredRowIterator ssTableIterator = null;
     volatile long filePos = -1;
 
-    private AsyncPartitionReader(SSTableReader table, SSTableReadsListener listener, DecoratedKey key, Slices slices, ColumnFilter selectedColumns, boolean reverse)
+    private AsyncPartitionReader(SSTableReader table,
+                                 SSTableReadsListener listener,
+                                 DecoratedKey key,
+                                 RowIndexEntry indexEntry,
+                                 FileDataInput dfile,
+                                 Slices slices,
+                                 ColumnFilter selectedColumns,
+                                 boolean reverse)
     {
         this.table = table;
         this.listener = listener;
+        this.indexEntry = indexEntry;
+        this.dfile = dfile;
         this.key = key;
         this.selectedColumns = selectedColumns;
         this.slices = slices;
         this.reverse = reverse;
         this.helper = new SerializationHelper(table.metadata(), table.descriptor.version.encodingVersion(), SerializationHelper.Flag.LOCAL, selectedColumns);
+        this.closeDataFile = (dfile == null);
         this.rc = table.dataFile.mmapped() ? ReaderConstraint.NONE : ReaderConstraint.IN_CACHE_ONLY;
     }
 
     /**
      * Creates a FUP from a AsyncPartitionReader
      *
-     * This is the only supported accessor of this class.
      */
-    public static Flow<FlowableUnfilteredPartition> create(SSTableReader table, SSTableReadsListener listener, DecoratedKey key, Slices slices, ColumnFilter selectedColumns, boolean reverse)
+    public static Flow<FlowableUnfilteredPartition> create(SSTableReader table,
+                                                           SSTableReadsListener listener,
+                                                           DecoratedKey key,
+                                                           Slices slices,
+                                                           ColumnFilter selectedColumns,
+                                                           boolean reverse)
     {
-        return new AsyncPartitionReader(table, listener, key, slices, selectedColumns, reverse).partitions();
+        return new AsyncPartitionReader(table, listener, key, null, null, slices, selectedColumns, reverse).partitions();
+    }
+
+    /**
+     * Create a FUP from the given index entry with no other constraint.
+     */
+    public static Flow<FlowableUnfilteredPartition> create(SSTableReader table,
+                                                           FileDataInput dfile,
+                                                           SSTableReadsListener listener,
+                                                           IndexFileEntry indexEntry)
+    {
+        return new AsyncPartitionReader(table, listener, indexEntry.key, indexEntry.entry, dfile, null, null, false).partitions();
+    }
+
+    /**
+     * Create a FUP from the given index entry with the given constraints.
+     */
+    public static Flow<FlowableUnfilteredPartition> create(SSTableReader table,
+                                                           FileDataInput dfile,
+                                                           SSTableReadsListener listener,
+                                                           IndexFileEntry indexEntry,
+                                                           Slices slices,
+                                                           ColumnFilter selectedColumns,
+                                                           boolean reversed)
+    {
+        return new AsyncPartitionReader(table, listener, indexEntry.key, indexEntry.entry, dfile, slices, selectedColumns, reversed).partitions();
     }
 
     public Flow<FlowableUnfilteredPartition> partitions()
     {
-        assert indexEntry == null;
         return new PartitionReader();
     }
 
@@ -154,11 +194,7 @@ class AsyncPartitionReader
          */
         void performRead(boolean isRetry) throws Exception
         {
-            if (issued)
-            {
-                subscriber.onComplete();    // our job is done, we have already issued partition.
-                return;
-            }
+            assert !issued;
 
             // If this is a retry the indexEntry may be already read.
             if (indexEntry == null)
@@ -171,17 +207,20 @@ class AsyncPartitionReader
                     return;
                 }
             }
-            else
-                assert isRetry;
 
             if (dfile == null)
                 dfile = table.getFileDataInput(indexEntry.position, rc);
             else
-                assert isRetry;
+                dfile.seek(indexEntry.position);
 
             // This is the last stage that can fail in-cache read.
             assert ssTableIterator == null;
-            ssTableIterator = (AbstractSSTableIterator) table.iterator(dfile, key, indexEntry, slices, selectedColumns, reverse, rc);
+
+            if (slices == null && selectedColumns == null)
+                ssTableIterator = table.simpleIterator(dfile, key, indexEntry, false);
+            else
+                ssTableIterator = table.iterator(dfile, key, indexEntry, slices, selectedColumns, reverse, rc);
+
             filePos = dfile.getFilePointer();
 
             PartitionHeader header = new PartitionHeader(ssTableIterator.metadata(),
@@ -193,7 +232,7 @@ class AsyncPartitionReader
 
             PartitionSubscription partitionContent = new PartitionSubscription();
             issued = true;
-            subscriber.onNext(new FlowableUnfilteredPartition(header, ssTableIterator.staticRow(), partitionContent)
+            subscriber.onFinal(new FlowableUnfilteredPartition(header, ssTableIterator.staticRow(), partitionContent)
             {
                 @Override
                 public void unused() throws Exception
@@ -205,19 +244,14 @@ class AsyncPartitionReader
 
         public void close() throws Exception
         {
-            // If we didn't get around to issuing a FUP, we need to close anything partially open.
+            // If we have issued a FUP, we have passed control over the opened dfile and sstableIterator to it.
+            // If didn't get around to issuing, we need to close anything partially open.
             if (issued || dfile == null)
                 return;
 
-            try
-            {
-                if (ssTableIterator != null)
-                    ssTableIterator.close();
-            }
-            finally
-            {
+            if (closeDataFile)
                 dfile.close();
-            }
+            assert ssTableIterator == null;
         }
 
 
@@ -286,7 +320,8 @@ class AsyncPartitionReader
             }
             finally
             {
-                dfile.close();
+                if (closeDataFile)
+                    dfile.close();
             }
         }
 

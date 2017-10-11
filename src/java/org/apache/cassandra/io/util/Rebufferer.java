@@ -68,9 +68,9 @@ public interface Rebufferer extends ReaderFileProxy
 
         private final CompletableFuture<ChunkCache.Buffer> asyncBuffer;
 
-        public NotInCacheException(CompletableFuture<ChunkCache.Buffer> asyncBuffer)
+        public NotInCacheException(CompletableFuture<ChunkCache.Buffer> asyncBuffer, String path, long position)
         {
-            super("Requested data is not in cache. Retry with ReaderConstraint.NONE.");
+            super(String.format("Requested data (%s@%d) is not in cache.", path, position));
             this.asyncBuffer = asyncBuffer;
         }
 
@@ -99,7 +99,7 @@ public interface Rebufferer extends ReaderFileProxy
             else
             {
                 //Track the ThreadLocals
-                Runnable wrappedOnReady = new TPCRunnable(onReady, ExecutorLocals.create(), TPCTaskType.READ_DISK_ASYNC, scheduler.coreId());
+                Runnable wrappedOnReady = TPCRunnable.wrap(onReady, ExecutorLocals.create(), TPCTaskType.READ_DISK_ASYNC, scheduler);
 
                 asyncBuffer.thenRunAsync(wrappedOnReady, scheduler.getExecutor())
                             .exceptionally(onError);

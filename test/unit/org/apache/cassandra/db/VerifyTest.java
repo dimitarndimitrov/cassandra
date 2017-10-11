@@ -67,6 +67,7 @@ public class VerifyTest
     public static final String COUNTER_CF4 = "Counter4";
     public static final String CORRUPT_CF = "Corrupt1";
     public static final String CORRUPT_CF2 = "Corrupt2";
+    public static final String CORRUPT_CF3 = "Corrupt3";
     public static final String CORRUPTCOUNTER_CF = "CounterCorrupt1";
     public static final String CORRUPTCOUNTER_CF2 = "CounterCorrupt2";
 
@@ -86,6 +87,7 @@ public class VerifyTest
                        standardCFMD(KEYSPACE, CF4),
                        standardCFMD(KEYSPACE, CORRUPT_CF),
                        standardCFMD(KEYSPACE, CORRUPT_CF2),
+                       standardCFMD(KEYSPACE, CORRUPT_CF3),
                        counterCFMD(KEYSPACE, COUNTER_CF).compression(compressionParameters),
                        counterCFMD(KEYSPACE, COUNTER_CF2).compression(compressionParameters),
                        counterCFMD(KEYSPACE, COUNTER_CF3),
@@ -348,8 +350,33 @@ public class VerifyTest
             }
             fail("Expected a CorruptSSTableException to be thrown");
         }
-
     }
+
+    @Test(expected = CorruptSSTableException.class)
+    public void testVerifyBrokenSSTableMetadata() throws IOException, WriteTimeoutException
+    {
+        CompactionManager.instance.disableAutoCompaction();
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CORRUPT_CF3);
+
+        fillCF(cfs, 2);
+
+        Util.getAll(Util.cmd(cfs).build());
+
+        SSTableReader sstable = cfs.getLiveSSTables().iterator().next();
+
+        String filenameToCorrupt = sstable.descriptor.filenameFor(Component.STATS);
+        RandomAccessFile file = new RandomAccessFile(filenameToCorrupt, "rw");
+        file.seek(0);
+        file.writeBytes(StringUtils.repeat('z', 2));
+        file.close();
+
+        try (Verifier verifier = new Verifier(cfs, sstable, false))
+        {
+            verifier.verify(false);
+        }
+    }
+
 
     protected void fillCF(ColumnFamilyStore cfs, int partitionsPerSSTable)
     {

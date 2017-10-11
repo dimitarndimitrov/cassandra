@@ -179,6 +179,30 @@ public class BTreeRow extends AbstractRow
         BTree.apply(btree, funtion, stopCondition, reversed);
     }
 
+    public <R> R reduce(R seed, BTree.ReduceFunction<R, ColumnData> reducer)
+    {
+        return BTree.reduce(btree, seed, reducer);
+    }
+
+    public <R> R reduceCells(R seed, BTree.ReduceFunction<R, Cell> reducer)
+    {
+        return reduce(seed, new BTree.ReduceFunction<R, ColumnData>() {
+            public R apply(R ret, ColumnData cd)
+            {
+                if (cd.column().isComplex())
+                    return ((ComplexColumnData)cd).reduce(ret, reducer);
+                else
+                    return reducer.apply(ret, (Cell)cd);
+            }
+
+            @Override
+            public boolean stop(R ret)
+            {
+                return reducer.stop(ret);
+            }
+        });
+    }
+
     private static int minDeletionTime(Object[] btree, LivenessInfo info, DeletionTime rowDeletion)
     {
         //we have to wrap this for the lambda
@@ -433,24 +457,24 @@ public class BTreeRow extends AbstractRow
 
     public int dataSize()
     {
-        int dataSize = clustering.dataSize()
-                     + primaryKeyLivenessInfo.dataSize()
-                     + deletion.dataSize();
+        WrappedInt dataSize = new WrappedInt(clustering.dataSize()
+                                             + primaryKeyLivenessInfo.dataSize()
+                                             + deletion.dataSize());
 
-        for (ColumnData cd : this)
-            dataSize += cd.dataSize();
-        return dataSize;
+        apply(cd -> dataSize.add(cd.dataSize()), false);
+
+        return dataSize.get();
     }
 
     public long unsharedHeapSizeExcludingData()
     {
-        long heapSize = EMPTY_SIZE
+        WrappedLong heapSize = new WrappedLong(EMPTY_SIZE
                       + clustering.unsharedHeapSizeExcludingData()
-                      + BTree.sizeOfStructureOnHeap(btree);
+                      + BTree.sizeOfStructureOnHeap(btree));
 
-        for (ColumnData cd : this)
-            heapSize += cd.unsharedHeapSizeExcludingData();
-        return heapSize;
+        apply(cd -> heapSize.add(cd.unsharedHeapSizeExcludingData()), false);
+
+        return heapSize.get();
     }
 
     public static Row.Builder sortedBuilder()

@@ -44,7 +44,6 @@ import com.google.common.util.concurrent.*;
 
 import com.datastax.apollo.utils.concurrent.CompletableFutures;
 import io.reactivex.Completable;
-
 import org.apache.commons.lang3.StringUtils;
 
 import org.slf4j.Logger;
@@ -64,6 +63,7 @@ import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.concurrent.StageManager;
 import org.apache.cassandra.concurrent.TPCUtils;
+import org.apache.cassandra.concurrent.WatcherThread;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.commitlog.CommitLog;
@@ -286,7 +286,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             mbs.registerMBean(this, jmxObjectName);
 
             mbs.registerMBean(StreamManager.instance, new ObjectName(StreamManager.OBJECT_NAME));
-            mbs.registerMBean(MemoryOnlyStatus.instance, new ObjectName(MemoryOnlyStatusMXBean.MBEAN_NAME));
+            mbs.registerMBean(MemoryOnlyStatus.instance, new ObjectName(MemoryOnlyStatusMXBean.MXBEAN_NAME));
         }
         catch (Exception e)
         {
@@ -313,9 +313,14 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     // should only be called via JMX
     public void stopGossiping()
     {
+        stopGossiping("by operator request");
+    }
+
+    private void stopGossiping(String reason)
+    {
         if (gossipActive)
         {
-            logger.warn("Stopping gossip by operator request");
+            logger.warn("Stopping gossip {}", reason);
             Gossiper.instance.stop();
             gossipActive = false;
         }
@@ -400,11 +405,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             return TPCUtils.completedFuture();
 
         return CompletableFuture.supplyAsync(() -> {
-            if (isGossipActive())
-            {
-                logger.error("Stopping gossiper");
-                stopGossiping();
-            }
+            stopGossiping("by internal request (typically an unrecoverable error)");
             return null;
         }, StageManager.getStage(Stage.GOSSIP));
     }
@@ -419,7 +420,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     }
 
     /**
-     * Set the Gossip flag RPC_READY to false and then
+     * Set the Gossip flag NATIVE_TRANSPORT_READY to false and then
      * shutdown the client services (thrift and CQL).
      *
      * Note that other nodes will do this for us when
@@ -430,7 +431,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
      */
     private void shutdownClientServers()
     {
-        setRpcReady(false);
+        setNativeTransportReady(false);
         stopNativeTransport();
     }
 
@@ -790,7 +791,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             getTokenMetadata().updateHostId(localHostId, FBUtilities.getBroadcastAddress());
             appStates.put(ApplicationState.NET_VERSION, valueFactory.networkVersion());
             appStates.put(ApplicationState.HOST_ID, valueFactory.hostId(localHostId));
-            appStates.put(ApplicationState.RPC_ADDRESS, valueFactory.rpcaddress(FBUtilities.getBroadcastRpcAddress()));
+            appStates.put(ApplicationState.NATIVE_TRANSPORT_ADDRESS, valueFactory.rpcaddress(FBUtilities.getNativeTransportBroadcastAddress()));
             appStates.put(ApplicationState.RELEASE_VERSION, valueFactory.releaseVersion());
 
             appStates.put(ApplicationState.NATIVE_TRANSPORT_PORT, valueFactory.nativeTransportPort(DatabaseDescriptor.getNativeTransportPort()));
@@ -1742,35 +1743,61 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
      *
      * @param endpoint The endpoint to get rpc address for
      * @return the rpc address
+     * @deprecated use {@link this#getNativeTransportAddress(InetAddress)} instead
      */
+    @Deprecated
     public String getRpcaddress(InetAddress endpoint)
     {
+        return getNativeTransportAddress(endpoint);
+    }
+
+    /**
+     * Return the native transport address associated with an endpoint as a string.
+     *
+     * @param endpoint The endpoint to get rpc address for
+     * @return the native transport addresss
+     */
+    public String getNativeTransportAddress(InetAddress endpoint)
+    {
         if (endpoint.equals(FBUtilities.getBroadcastAddress()))
-            return FBUtilities.getBroadcastRpcAddress().getHostAddress();
-        else if (Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.RPC_ADDRESS) == null)
+            return FBUtilities.getNativeTransportBroadcastAddress().getHostAddress();
+        else if (Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.NATIVE_TRANSPORT_ADDRESS) == null)
             return endpoint.getHostAddress();
         else
-            return Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.RPC_ADDRESS).value;
+            return Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.NATIVE_TRANSPORT_ADDRESS).value;
     }
 
     /**
      * for a keyspace, return the ranges and corresponding RPC addresses for a given keyspace.
      *
+     * @deprecated use {@link this#getRangeToNativeTransportAddressMap(String)} instead.
+
      * @param keyspace
      * @return the endpoint map
      */
     public Map<List<String>, List<String>> getRangeToRpcaddressMap(String keyspace)
     {
+        return getRangeToNativeTransportAddressMap(keyspace);
+    }
+
+    /**
+     * for a keyspace, return the ranges and corresponding native transport addresses for a given keyspace.
+     *
+     * @param keyspace
+     * @return the endpoint map
+     */
+    public Map<List<String>, List<String>> getRangeToNativeTransportAddressMap(String keyspace)
+    {
         /* All the ranges for the tokens */
         Map<List<String>, List<String>> map = new HashMap<>();
         for (Map.Entry<Range<Token>, List<InetAddress>> entry : getRangeToAddressMap(keyspace).entrySet())
         {
-            List<String> rpcaddrs = new ArrayList<>(entry.getValue().size());
+            List<String> nativeTransportAddresses = new ArrayList<>(entry.getValue().size());
             for (InetAddress endpoint : entry.getValue())
             {
-                rpcaddrs.add(getRpcaddress(endpoint));
+                nativeTransportAddresses.add(getRpcaddress(endpoint));
             }
-            map.put(entry.getKey().asList(), rpcaddrs);
+            map.put(entry.getKey().asList(), nativeTransportAddresses);
         }
         return map;
     }
@@ -2076,10 +2103,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                         updateTopology(endpoint);
                         updatePeerInfoBlocking(endpoint, "rack", value.value);
                         break;
-                    case RPC_ADDRESS:
+                    case NATIVE_TRANSPORT_ADDRESS:
                         try
                         {
-                            updatePeerInfoBlocking(endpoint, "rpc_address", InetAddress.getByName(value.value));
+                            InetAddress address = InetAddress.getByName(value.value);
+                            updatePeerInfoBlocking(endpoint, "rpc_address", address);
+                            updatePeerInfoBlocking(endpoint, "native_transport_address", address);
                         }
                         catch (UnknownHostException e)
                         {
@@ -2093,8 +2122,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                     case HOST_ID:
                         updatePeerInfoBlocking(endpoint, "host_id", UUID.fromString(value.value));
                         break;
-                    case RPC_READY:
-                        notifyRpcChange(endpoint, epState.isRpcReady());
+                    case NATIVE_TRANSPORT_READY:
+                        notifyNativeTransportChange(endpoint, epState.isRpcReady());
                         break;
                     case NET_VERSION:
                         updateNetVersion(endpoint, value);
@@ -2171,10 +2200,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                 case RACK:
                     updatePeerInfoBlocking(endpoint, "rack", entry.getValue().value);
                     break;
-                case RPC_ADDRESS:
+                case NATIVE_TRANSPORT_ADDRESS:
                     try
                     {
-                        updatePeerInfoBlocking(endpoint, "rpc_address", InetAddress.getByName(entry.getValue().value));
+                        InetAddress address = InetAddress.getByName(entry.getValue().value);
+                        updatePeerInfoBlocking(endpoint, "rpc_address", address);
+                        updatePeerInfoBlocking(endpoint, "native_transport_address", address);
                     }
                     catch (UnknownHostException e)
                     {
@@ -2206,7 +2237,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         }
     }
 
-    private void notifyRpcChange(InetAddress endpoint, boolean ready)
+    private void notifyNativeTransportChange(InetAddress endpoint, boolean ready)
     {
         if (ready)
             notifyUp(endpoint);
@@ -2263,21 +2294,21 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     }
 
     /**
-     * Set the RPC status. Because when draining a node we need to set the RPC
+     * Set the Native Transport status. Because when draining a node we need to set the Native Transport
      * status to not ready, and drain is called by the shutdown hook, it may be that value is false
      * and there is no local endpoint state. In this case it's OK to just do nothing. Therefore,
      * we assert that the local endpoint state is not null only when value is true.
      *
-     * @param value - true indicates that RPC is ready, false indicates the opposite.
+     * @param value - true indicates that native transport is ready, false indicates the opposite.
      */
-    public void setRpcReady(boolean value)
+    public void setNativeTransportReady(boolean value)
     {
         EndpointState state = Gossiper.instance.getEndpointStateForEndpoint(FBUtilities.getBroadcastAddress());
         // if value is false we're OK with a null state, if it is true we are not.
         assert !value || state != null;
 
         if (state != null)
-            Gossiper.instance.addLocalApplicationState(ApplicationState.RPC_READY, valueFactory.rpcReady(value));
+            Gossiper.instance.addLocalApplicationState(ApplicationState.NATIVE_TRANSPORT_READY, valueFactory.nativeTransportReady(value));
     }
 
     private Collection<Token> getTokensFor(InetAddress endpoint)
@@ -3970,6 +4001,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
         try
         {
+            CompletableFuture<Void> nodeSyncStopFuture = nodeSyncService.disable(false);
+            waitForNodeSyncShutdown(nodeSyncStopFuture);
+
             PendingRangeCalculatorService.instance.blockUntilFinished();
 
             String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
@@ -4043,6 +4077,22 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         finally
         {
             isDecommissioning.set(false);
+        }
+    }
+
+    private static void waitForNodeSyncShutdown(CompletableFuture<Void> nodeSyncStopFuture) throws InterruptedException, ExecutionException
+    {
+        // As NodeSync may write into it's own nodesync_status table, wait on it to finish now before flushing
+        // tables since the goal of flushing is to ensure we have nothing to replay.
+        try
+        {
+            nodeSyncStopFuture.get(2, TimeUnit.MINUTES);
+        }
+        catch (TimeoutException e)
+        {
+            logger.warn("Wasn't able to stop NodeSync service within 2 minutes during drain. "
+                    + "While this generally shouldn't happen (and should be reported if it happens constantly), "
+                    + "it should be harmless.");
         }
     }
 
@@ -4572,19 +4622,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             if (!isFinalShutdown)
                 setMode(Mode.DRAINING, "flushing column families", false);
 
-
-            // As NodeSync may write into it's own nodesync_status table, wait on it to finish now before flushing
-            // tables since the goal of flushing is to ensure we have nothing to replay.
-            try
-            {
-                nodeSyncStopFuture.get(2, TimeUnit.MINUTES);
-            }
-            catch (TimeoutException e)
-            {
-                logger.warn("Wasn't able to stop NodeSync service within 2 minutes during drain. "
-                            + "While this generally shouldn't happen (and should be reported if it happens constantly), "
-                            + "it should be harmless.");
-            }
+            waitForNodeSyncShutdown(nodeSyncStopFuture);
 
             // disable autocompaction - we don't want to start any new compactions while we are draining
             for (Keyspace keyspace : Keyspace.all())
@@ -4623,6 +4661,10 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                 if (!SSTableReader.readHotnessTrackerExecutor.awaitTermination(1, TimeUnit.MINUTES))
                     logger.warn("Wasn't able to stop the SSTable read hotness tracker with 1 minute.");
             }
+
+            // Wait for any sstable deletions because the non periodic tasks can create mutations when deleting sstables
+            // in the sstable activity table, see the callers of SystemKeyspace.clearSSTableReadMeter
+            LifecycleTransaction.waitForDeletions();
 
             // Flush the system tables after all other tables are flushed, just in case flushing modifies any system state
             // like CASSANDRA-5151. Don't bother with progress tracking since system data is tiny.
@@ -4679,6 +4721,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                 logger.warn("Failed to wait for non periodic tasks to shutdown");
 
             ColumnFamilyStore.shutdownPostFlushExecutor();
+
+            WatcherThread.instance.get().awaitTermination(1, TimeUnit.MINUTES);
+
             setMode(Mode.DRAINED, !isFinalShutdown);
         }
         catch (Throwable t)

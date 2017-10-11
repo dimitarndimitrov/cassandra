@@ -19,7 +19,7 @@
 package org.apache.cassandra.utils.flow;
 
 /**
- * Base class for flow transformations that only intercept both the onNext path (e.g. map)
+ * Base class for flow transformations that only intercepts the onNext path (e.g. map)
  *
  * Descendants need to implement onNext().
  */
@@ -48,5 +48,5 @@ public abstract class FlowTransformNext<I, O> extends FlowTransformBase<I, O>
         subscriptionRecipient.onSubscribe(source);
     }
 
-    // at least onNext must be overridden by subclass
+    // at least onNext and onFinal must be overridden by subclass
 }

@@ -57,7 +57,10 @@ public class ReadWriteTestSmall extends CQLTester
     static final int count = 1_100_000;
 
     @Param({"10000", "1000", "100"})
-    int BATCH = 2_500;
+    int BATCH = 1_000;
+
+    @Param({"false", "true"})
+    boolean flush = true;
 
     Random rand = new Random(1);
 
@@ -86,7 +89,11 @@ public class ReadWriteTestSmall extends CQLTester
         System.err.println("Writing " + count);
         for (long i = 0; i < count; i++)
             execute(writeStatement, i, i, i );
-        cfs.forceBlockingFlush();
+
+        if (flush)
+            cfs.forceBlockingFlush();
+
+        // Needed to stabilize sstable count for off-cache sized tests (e.g. count = 100_000_000)
         while (cfs.getLiveSSTables().size() >= 15)
         {
             cfs.enableAutoCompaction(true);

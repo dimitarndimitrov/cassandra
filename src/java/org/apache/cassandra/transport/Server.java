@@ -113,7 +113,7 @@ public class Server implements CassandraDaemon.Server
                                     .channel(TPC.USE_EPOLL ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
                                     .childOption(ChannelOption.TCP_NODELAY, true)
                                     .childOption(ChannelOption.SO_LINGER, 0)
-                                    .childOption(ChannelOption.SO_KEEPALIVE, DatabaseDescriptor.getRpcKeepAlive())
+                                    .childOption(ChannelOption.SO_KEEPALIVE, DatabaseDescriptor.getNativeTransportKeepAlive())
                                     .childOption(ChannelOption.ALLOCATOR, CBUtil.allocator)
                                     .childOption(ChannelOption.WRITE_BUFFER_HIGH_WATER_MARK, 32 * 1024)
                                     .childOption(ChannelOption.WRITE_BUFFER_LOW_WATER_MARK, 8 * 1024);
@@ -318,6 +318,7 @@ public class Server implements CassandraDaemon.Server
         {
             ChannelPipeline pipeline = channel.pipeline();
 
+
             // Add the ConnectionLimitHandler to the pipeline if configured to do so.
             if (DatabaseDescriptor.getNativeTransportMaxConcurrentConnections() > 0
                     || DatabaseDescriptor.getNativeTransportMaxConcurrentConnectionsPerIp() > 0)
@@ -515,7 +516,7 @@ public class Server implements CassandraDaemon.Server
             // which is not useful to any driver and in fact may cauase serious problems to some drivers,
             // see CASSANDRA-10052
             if (!endpoint.equals(FBUtilities.getBroadcastAddress()) &&
-                event.nodeAddress().equals(FBUtilities.getBroadcastRpcAddress()))
+                event.nodeAddress().equals(FBUtilities.getNativeTransportBroadcastAddress()))
                 return;
 
             send(event);

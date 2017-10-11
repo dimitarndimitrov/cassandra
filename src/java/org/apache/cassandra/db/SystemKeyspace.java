@@ -38,6 +38,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.reactivex.schedulers.Schedulers;
+import org.apache.cassandra.concurrent.TPC;
 import org.apache.cassandra.concurrent.TPCUtils;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.QueryProcessor;
@@ -161,6 +162,7 @@ public final class SystemKeyspace
               + "schema_version uuid,"
               + "tokens set<varchar>,"
               + "truncated_at map<uuid, blob>,"
+              + "native_transport_address inet,"
               + "native_transport_port int,"
               + "native_transport_port_ssl int,"
               + "storage_port int,"
@@ -191,6 +193,7 @@ public final class SystemKeyspace
               + "rpc_address inet,"
               + "schema_version uuid,"
               + "tokens set<varchar>,"
+              + "native_transport_address inet,"
               + "native_transport_port int,"
               + "native_transport_port_ssl int,"
               + "storage_port int,"
@@ -517,6 +520,32 @@ public final class SystemKeyspace
         });
     }
 
+    /**
+     * The peers cache is loaded with other caches during {@link #beginStartupBlocking()}
+     * and {@link #finishStartupBlocking()} but for tools we don't want to unnecessarily
+     * start-up services unless it is required (CASSANDRA-9054). Some snitches however do
+     * require peers info and {@link DatabaseDescriptor#toolInitialization()} does load
+     * the snitches, so we load the peers cache on demand if it is safe to do so (not on
+     * a TPC thread), see APOLLO-1210.
+     *
+     * WARNING: this method should not be called by a method already holding the {@link #GLOBAL_LOCK}.
+     */
+    private static void checkPeersCache()
+    {
+        if (peers != null)
+            return;
+
+        if (TPC.isTPCThread())
+            throw new TPCUtils.WouldBlockException(String.format("Reading system peers would block %s, call startup methods first",
+                                                                 Thread.currentThread().getName()));
+
+        TPCUtils.withLockBlocking(GLOBAL_LOCK, () -> {
+            if (peers == null)
+                peers = TPCUtils.blockingGet(readPeerInfo());
+            return null;
+        });
+    }
+
     private static void verify(boolean test, String error)
     {
         if (!test)
@@ -537,12 +566,13 @@ public final class SystemKeyspace
                      "rpc_address," +
                      "broadcast_address," +
                      "listen_address," +
+                     "native_transport_address," +
                      "native_transport_port," +
                      "native_transport_port_ssl," +
                      "storage_port," +
                      "storage_port_ssl," +
                      "jmx_port" +
-                     ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                     ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
         return TPCUtils.toFutureVoid(executeOnceInternal(format(req, LOCAL),
                                                          LOCAL,
@@ -553,9 +583,10 @@ public final class SystemKeyspace
                                                          snitch.getDatacenter(FBUtilities.getBroadcastAddress()),
                                                          snitch.getRack(FBUtilities.getBroadcastAddress()),
                                                          DatabaseDescriptor.getPartitioner().getClass().getName(),
-                                                         DatabaseDescriptor.getRpcAddress(),
+                                                         DatabaseDescriptor.getNativeTransportAddress(),
                                                          FBUtilities.getBroadcastAddress(),
                                                          FBUtilities.getLocalAddress(),
+                                                         DatabaseDescriptor.getNativeTransportAddress(),
                                                          DatabaseDescriptor.getNativeTransportPort(),
                                                          DatabaseDescriptor.getNativeTransportPortSSL(),
                                                          DatabaseDescriptor.getStoragePort(),
@@ -849,7 +880,7 @@ public final class SystemKeyspace
     public static CompletableFuture<Void> updatePreferredIP(InetAddress ep, InetAddress preferred_ip)
     {
         return TPCUtils.withLock(GLOBAL_LOCK, () -> {
-            InetAddress current = getPreferredIP(ep);
+            InetAddress current = getPreferredIPIfAvailable(ep);
             if (current == preferred_ip)
                 return TPCUtils.completedFuture();
 
@@ -1023,7 +1054,7 @@ public final class SystemKeyspace
      */
     public static Map<InetAddress, UUID> getHostIds()
     {
-        verify(peers != null, "startup methods not yet called");
+        checkPeersCache();
         Map<InetAddress, UUID> hostIdMap = new HashMap<>();
 
         for (Map.Entry<InetAddress, PeerInfo> entry : peers.entrySet())
@@ -1040,8 +1071,13 @@ public final class SystemKeyspace
      */
     public static InetAddress getPreferredIP(InetAddress ep)
     {
-        verify(peers != null, "startup methods not yet called");
-        PeerInfo info = peers.get(ep);
+        checkPeersCache();
+        return getPreferredIPIfAvailable(ep);
+    }
+
+    private static InetAddress getPreferredIPIfAvailable(InetAddress ep)
+    {
+        PeerInfo info = peers == null ? null : peers.get(ep);
         return info == null || info.preferredIp == null ? ep : info.preferredIp;
     }
 
@@ -1050,7 +1086,7 @@ public final class SystemKeyspace
      */
     public static Map<InetAddress, Map<String,String>> loadDcRackInfo()
     {
-        verify(peers != null, "startup methods not yet called");
+        checkPeersCache();
         Map<InetAddress, Map<String, String>> result = new HashMap<>();
 
         for (Map.Entry<InetAddress, PeerInfo> entry : peers.entrySet())
@@ -1076,7 +1112,7 @@ public final class SystemKeyspace
      */
     public static CassandraVersion getReleaseVersion(InetAddress ep)
     {
-        verify(peers != null, "startup methods not yet called");
+        checkPeersCache();
 
         if (FBUtilities.getBroadcastAddress().equals(ep))
             return new CassandraVersion(FBUtilities.getReleaseVersionString());

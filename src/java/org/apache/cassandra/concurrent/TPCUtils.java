@@ -24,7 +24,10 @@ import java.util.function.Supplier;
 import com.google.common.base.Throwables;
 
 import io.reactivex.Completable;
+import io.reactivex.CompletableObserver;
 import io.reactivex.Single;
+import io.reactivex.SingleObserver;
+import io.reactivex.internal.disposables.EmptyDisposable;
 import org.apache.cassandra.utils.concurrent.ExecutableLock;
 
 public class TPCUtils
@@ -40,7 +43,7 @@ public class TPCUtils
     public static <T> T blockingGet(Single<T> single)
     {
         if (TPC.isTPCThread())
-            throw new WouldBlockException("Calling blockingGet would block a TPC thread");
+            throw new WouldBlockException("Calling blockingGet would block TPC thread " + Thread.currentThread().getName());
 
         return single.blockingGet();
     }
@@ -48,7 +51,7 @@ public class TPCUtils
     public static void blockingAwait(Completable completable)
     {
         if (TPC.isTPCThread())
-            throw new WouldBlockException("Calling blockingAwait would block a TPC thread");
+            throw new WouldBlockException("Calling blockingAwait would block TPC thread " + Thread.currentThread().getName());
 
         completable.blockingAwait();
     }
@@ -56,7 +59,7 @@ public class TPCUtils
     public static <T> T blockingGet(CompletableFuture<T> future)
     {
         if (TPC.isTPCThread())
-            throw new WouldBlockException("Calling blockingGet would block a TPC thread");
+            throw new WouldBlockException("Calling blockingGet would block TPC thread " + Thread.currentThread().getName());
 
         try
         {
@@ -75,7 +78,7 @@ public class TPCUtils
     public static void blockingAwait(CompletableFuture future)
     {
         if (TPC.isTPCThread())
-            throw new WouldBlockException("Calling blockingAwait would block a TPC thread");
+            throw new WouldBlockException("Calling blockingAwait would block TPC thread " + Thread.currentThread().getName());
 
         try
         {
@@ -136,6 +139,40 @@ public class TPCUtils
         CompletableFuture<Void> ret = new CompletableFuture<>();
         completable.subscribe(()-> ret.complete(null), ret::completeExceptionally);
         return ret;
+    }
+
+    public static Completable toCompletable(CompletableFuture<Void> future)
+    {
+        return new Completable()
+        {
+            protected void subscribeActual(CompletableObserver observer)
+            {
+                observer.onSubscribe(EmptyDisposable.INSTANCE);
+                future.whenComplete((res, err) ->{
+                    if (err == null)
+                        observer.onComplete();
+                    else
+                        observer.onError(err);
+                });
+            }
+        };
+    }
+
+    public static <T> Single<T> toSingle(CompletableFuture<T> future)
+    {
+        return new Single<T>()
+        {
+            protected void subscribeActual(SingleObserver<? super T> observer)
+            {
+                observer.onSubscribe(EmptyDisposable.INSTANCE);
+                future.whenComplete((res, err) -> {
+                    if (err == null)
+                        observer.onSuccess(res);
+                    else
+                        observer.onError(err);
+                });
+            }
+        };
     }
 
     /**

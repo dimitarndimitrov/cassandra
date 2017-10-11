@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.util.UUID;
 
 import org.junit.After;
 import org.junit.Assert;
@@ -102,7 +103,7 @@ public class LegacySSTableTest
 
         String scp = System.getProperty(LEGACY_SSTABLE_PROP);
         Assert.assertNotNull("System property " + LEGACY_SSTABLE_ROOT + " not set", scp);
-        
+
         LEGACY_SSTABLE_ROOT = new File(scp).getAbsoluteFile();
         Assert.assertTrue("System property " + LEGACY_SSTABLE_ROOT + " does not specify a directory", LEGACY_SSTABLE_ROOT.isDirectory());
 
@@ -166,6 +167,28 @@ public class LegacySSTableTest
         doTestLegacyCqlTables();
     }
 
+    @Test
+    public void testMutateMetadata() throws Exception
+    {
+        // we need to make sure we write old version metadata in the format for that version
+        for (String legacyVersion : legacyVersions)
+        {
+            logger.info("Loading legacy version: {}", legacyVersion);
+            truncateLegacyTables(legacyVersion);
+            loadLegacyTables(legacyVersion);
+            CacheService.instance.invalidateKeyCache();
+
+            for (ColumnFamilyStore cfs : Keyspace.open("legacy_tables").getColumnFamilyStores())
+            {
+                for (SSTableReader sstable : cfs.getLiveSSTables())
+                {
+                    sstable.descriptor.getMetadataSerializer().mutateRepaired(sstable.descriptor, 1234, UUID.randomUUID());
+                    sstable.reloadSSTableMetadata();
+                }
+            }
+        }
+    }
+
     private void doTestLegacyCqlTables() throws Exception
     {
         for (String legacyVersion : legacyVersions)
@@ -176,6 +199,7 @@ public class LegacySSTableTest
             createAndVerifyIndex(legacyVersion);
             CacheService.instance.invalidateKeyCache();
             long startCount = CacheService.instance.keyCache.size();
+            verifyRangeReads(legacyVersion);
             verifyReads(legacyVersion);
             verifyCache(legacyVersion, startCount);
             compactLegacyTables(legacyVersion);
@@ -229,7 +253,7 @@ public class LegacySSTableTest
             Keyspace.open("legacy_tables").getColumnFamilyStore(String.format("legacy_%s_simple_counter%s", legacyVersion, getCompactNameSuffix(compact))).truncateBlocking();
             Keyspace.open("legacy_tables").getColumnFamilyStore(String.format("legacy_%s_clust%s", legacyVersion, getCompactNameSuffix(compact))).truncateBlocking();
             Keyspace.open("legacy_tables").getColumnFamilyStore(String.format("legacy_%s_clust_counter%s", legacyVersion, getCompactNameSuffix(compact))).truncateBlocking();
-        
+
             dropIndexes(legacyVersion, compact);
         }
     }
@@ -283,6 +307,18 @@ public class LegacySSTableTest
         Assert.assertEquals(endCount, CacheService.instance.keyCache.size());
     }
 
+    private static void verifyRangeReads(String legacyVersion)
+    {
+        for (int compact = 0; compact <= 1; compact++)
+        {
+            readSimpleTable(legacyVersion, getCompactNameSuffix(compact));
+            readSimpleCounterTable(legacyVersion, getCompactNameSuffix(compact));
+
+            readClusteringTable(legacyVersion, getCompactNameSuffix(compact));
+            readClusteringCounterTable(legacyVersion, getCompactNameSuffix(compact));
+        }
+    }
+
     private static void verifyReads(String legacyVersion)
     {
         for (int compact = 0; compact <= 1; compact++)
@@ -319,6 +355,25 @@ public class LegacySSTableTest
         Assert.assertEquals(1L, rs.one().getLong("val"));
     }
 
+    private static void readClusteringCounterTable(String legacyVersion, String compactSuffix)
+    {
+        logger.debug("Read legacy_{}_clust_counter{}", legacyVersion, compactSuffix);
+        UntypedResultSet rs;
+        rs = QueryProcessor.executeInternal(String.format("SELECT * FROM legacy_tables.legacy_%s_clust_counter%s", legacyVersion, compactSuffix));
+        assertLegacyCounterResults(250, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_clust_counter%s", legacyVersion, compactSuffix));
+        assertLegacyCounterResults(250, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_clust_counter%s where pk >= '1' and pk < '4' ALLOW FILTERING",
+                                                          legacyVersion, compactSuffix));
+        assertLegacyCounterResults(150, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_clust_counter%s where pk > '1' and pk <= '4' ALLOW FILTERING",
+                                                          legacyVersion, compactSuffix));
+        assertLegacyCounterResults(150, rs);
+    }
+
     private static void readClusteringTable(String legacyVersion, String compactSuffix, int ck, String ckValue, String pkValue)
     {
         logger.debug("Read legacy_{}_clust{}", legacyVersion, compactSuffix);
@@ -332,6 +387,25 @@ public class LegacySSTableTest
         assertLegacyClustRows(3, rs);
     }
 
+    private static void readClusteringTable(String legacyVersion, String compactSuffix)
+    {
+        logger.debug("Read legacy_{}_clust{}", legacyVersion, compactSuffix);
+        UntypedResultSet rs;
+        rs = QueryProcessor.executeInternal(String.format("SELECT * FROM legacy_tables.legacy_%s_clust%s", legacyVersion, compactSuffix));
+        assertLegacyClustRows(250, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_clust%s", legacyVersion, compactSuffix));
+        assertLegacyClustRows(250, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_clust%s where pk >= '1' and pk < '4' ALLOW FILTERING",
+                                                          legacyVersion, compactSuffix));
+        assertLegacyClustRows(150, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_clust%s where pk > '1' and pk <= '4' ALLOW FILTERING",
+                                                          legacyVersion, compactSuffix));
+        assertLegacyClustRows(150, rs);
+    }
+
     private static void readSimpleCounterTable(String legacyVersion, String compactSuffix, String pkValue)
     {
         logger.debug("Read legacy_{}_simple_counter{}", legacyVersion, compactSuffix);
@@ -342,6 +416,24 @@ public class LegacySSTableTest
         Assert.assertEquals(1L, rs.one().getLong("val"));
     }
 
+    private static void readSimpleCounterTable(String legacyVersion, String compactSuffix)
+    {
+        logger.debug("Read full legacy_{}_simple_counter{}", legacyVersion, compactSuffix);
+        UntypedResultSet rs;
+        rs = QueryProcessor.executeInternal(String.format("SELECT * FROM legacy_tables.legacy_%s_simple_counter%s", legacyVersion, compactSuffix));
+        assertLegacyCounterResults(5, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_simple_counter%s", legacyVersion, compactSuffix));
+        assertLegacyCounterResults(5, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT * FROM legacy_tables.legacy_%s_simple_counter%s where pk >= '1' and pk < '4' ALLOW FILTERING",
+                                                          legacyVersion, compactSuffix));
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT * FROM legacy_tables.legacy_%s_simple_counter%s where pk > '1' and pk <= '4' ALLOW FILTERING",
+                                                          legacyVersion, compactSuffix));
+        assertLegacyCounterResults(3, rs);
+    }
+
     private static void readSimpleTable(String legacyVersion, String compactSuffix, String pkValue)
     {
         logger.debug("Read simple: legacy_{}_simple{}", legacyVersion, compactSuffix);
@@ -350,6 +442,23 @@ public class LegacySSTableTest
         Assert.assertNotNull(rs);
         Assert.assertEquals(1, rs.size());
         Assert.assertEquals("foo bar baz", rs.one().getString("val"));
+    }
+
+    private static void readSimpleTable(String legacyVersion, String compactSuffix)
+    {
+        logger.debug("Read full simple: legacy_{}_simple{}", legacyVersion, compactSuffix);
+        UntypedResultSet rs;
+        rs = QueryProcessor.executeInternal(String.format("SELECT * FROM legacy_tables.legacy_%s_simple%s", legacyVersion, compactSuffix));
+        assertLegacySimpleRows(5, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_simple%s", legacyVersion, compactSuffix));
+        assertLegacySimpleRows(5, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_simple%s where pk >= '1' and pk < '4' ALLOW FILTERING", legacyVersion, compactSuffix));
+        assertLegacySimpleRows(3, rs);
+
+        rs = QueryProcessor.executeInternal(String.format("SELECT val FROM legacy_tables.legacy_%s_simple%s where pk > '1' and pk <= '4' ALLOW FILTERING", legacyVersion, compactSuffix));
+        assertLegacySimpleRows(3, rs);
     }
 
     private static void createKeyspace()
@@ -369,7 +478,7 @@ public class LegacySSTableTest
             QueryProcessor.executeInternal(String.format("CREATE TABLE legacy_tables.legacy_%s_clust_counter%s (pk text, ck text, val counter, PRIMARY KEY (pk, ck))%s", legacyVersion, compactSuffix, tableSuffix));
         }
     }
-    
+
     private static void createAndVerifyIndex(String legacyVersion) throws InterruptedException
     {
         for (int i = 0; i <= 1; i++)
@@ -409,6 +518,29 @@ public class LegacySSTableTest
         }
         CacheService.instance.invalidateCounterCache();
         CacheService.instance.invalidateKeyCache();
+    }
+
+    private static void assertLegacyCounterResults(int numExpected, UntypedResultSet rs)
+    {
+        Assert.assertNotNull(rs);
+        Assert.assertEquals(numExpected, rs.size());
+
+        for (UntypedResultSet.Row row : rs)
+            Assert.assertEquals(1L, row.getLong("val"));
+    }
+
+    private static void assertLegacySimpleRows(int count, UntypedResultSet rs)
+    {
+        Assert.assertNotNull(rs);
+        Assert.assertEquals(count, rs.size());
+
+        for (int i = 0; i < count; i++)
+        {
+            for (UntypedResultSet.Row row : rs)
+            {
+                Assert.assertEquals("foo bar baz", row.getString("val"));
+            }
+        }
     }
 
     private static void assertLegacyClustRows(int count, UntypedResultSet rs)

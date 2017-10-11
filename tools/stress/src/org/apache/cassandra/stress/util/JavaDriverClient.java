@@ -24,6 +24,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import javax.net.ssl.SSLContext;
 
+import com.google.common.util.concurrent.ListenableFuture;
+
 import com.datastax.driver.core.*;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 import com.datastax.driver.core.policies.LoadBalancingPolicy;
@@ -219,12 +221,12 @@ public class JavaDriverClient
         return result;
     }
 
-    public ContinuousPagingResult execute(Statement statement, ContinuousPagingOptions pagingOptions)
+    public ListenableFuture<AsyncContinuousPagingResult> execute(Statement statement, ContinuousPagingOptions pagingOptions)
     {
-        ContinuousPagingResult result = null;
+        ListenableFuture<AsyncContinuousPagingResult> result;
         try
         {
-            result = getSession().executeContinuously(statement, pagingOptions);
+            result = getSession().executeContinuouslyAsync(statement, pagingOptions);
         }
         finally
         {
@@ -239,13 +241,23 @@ public class JavaDriverClient
     public ResultSet execute(String query, org.apache.cassandra.db.ConsistencyLevel consistency)
     {
         SimpleStatement stmt = new SimpleStatement(query);
-        stmt.setConsistencyLevel(from(consistency));
+        if (consistency.isSerialConsistency())
+            stmt.setSerialConsistencyLevel(from(consistency));
+        else
+            stmt.setConsistencyLevel(from(consistency));
         return execute(stmt);
     }
 
     public ResultSet executePrepared(PreparedStatement stmt, List<Object> queryParams, org.apache.cassandra.db.ConsistencyLevel consistency)
     {
-        stmt.setConsistencyLevel(from(consistency));
+        if (consistency.isSerialConsistency())
+        {
+            stmt.setSerialConsistencyLevel(from(consistency));
+        }
+        else
+        {
+            stmt.setConsistencyLevel(from(consistency));
+        }
         BoundStatement bstmt = stmt.bind((Object[]) queryParams.toArray(new Object[queryParams.size()]));
         return execute(bstmt);
     }
@@ -279,6 +291,10 @@ public class JavaDriverClient
                 return com.datastax.driver.core.ConsistencyLevel.EACH_QUORUM;
             case LOCAL_ONE:
                 return com.datastax.driver.core.ConsistencyLevel.LOCAL_ONE;
+            case SERIAL:
+                return com.datastax.driver.core.ConsistencyLevel.SERIAL;
+            case LOCAL_SERIAL:
+                return com.datastax.driver.core.ConsistencyLevel.LOCAL_SERIAL;
         }
         throw new AssertionError();
     }
