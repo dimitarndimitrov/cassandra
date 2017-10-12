@@ -18,11 +18,9 @@
 
 package org.apache.cassandra.net.async;
 
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Optional;
 
-import com.google.common.net.InetAddresses;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -31,7 +29,6 @@ import org.junit.Test;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.DefaultEventLoop;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollServerSocketChannel;
@@ -44,15 +41,14 @@ import io.netty.handler.ssl.SslHandler;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import org.apache.cassandra.auth.AllowAllInternodeAuthenticator;
 import org.apache.cassandra.auth.IInternodeAuthenticator;
-import org.apache.cassandra.config.Config;
+import org.apache.cassandra.concurrent.TPC;
+import org.apache.cassandra.concurrent.TPCEventLoopGroup;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
-import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions.InternodeEncryption;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.async.NettyFactory.InboundInitializer;
 import org.apache.cassandra.net.async.NettyFactory.OutboundInitializer;
-import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.NativeLibrary;
 
 public class NettyFactoryTest
@@ -85,40 +81,24 @@ public class NettyFactoryTest
     }
 
     @Test
-    public void createServerChannel_Epoll()
-    {
-        Channel inboundChannel = createServerChannel(true);
-        if (inboundChannel == null)
-            return;
-        Assert.assertEquals(EpollServerSocketChannel.class, inboundChannel.getClass());
-        inboundChannel.close();
-    }
-
-    private Channel createServerChannel(boolean useEpoll)
+    public void createServerChannel()
     {
         InboundInitializer inboundInitializer = new InboundInitializer(AUTHENTICATOR, null, channelGroup);
-        factory = new NettyFactory(useEpoll);
+        factory = new NettyFactory();
 
         try
         {
-            return factory.createInboundChannel(LOCAL_ADDR, inboundInitializer, receiveBufferSize);
+            Channel channel = factory.createInboundChannel(LOCAL_ADDR, inboundInitializer, receiveBufferSize);
+            if (TPC.USE_EPOLL)
+                Assert.assertTrue(channel instanceof EpollServerSocketChannel);
+            else
+                Assert.assertTrue(channel instanceof NioServerSocketChannel);
         }
         catch (Exception e)
         {
             if (NativeLibrary.osType == NativeLibrary.OSType.LINUX)
-                throw e;
-
-            return null;
+                Assert.fail(e.getMessage());
         }
-    }
-
-    @Test
-    public void createServerChannel_Nio()
-    {
-        Channel inboundChannel = createServerChannel(false);
-        Assert.assertNotNull("we should always be able to get a NIO channel", inboundChannel);
-        Assert.assertEquals(NioServerSocketChannel.class, inboundChannel.getClass());
-        inboundChannel.close();
     }
 
     @Test(expected = ConfigurationException.class)
@@ -148,106 +128,24 @@ public class NettyFactoryTest
     }
 
     @Test
-    public void deterineAcceptGroupSize()
+    public void getEventLoopGroup()
     {
-        Assert.assertEquals(1, NettyFactory.determineAcceptGroupSize(InternodeEncryption.none));
-        Assert.assertEquals(1, NettyFactory.determineAcceptGroupSize(InternodeEncryption.all));
-        Assert.assertEquals(2, NettyFactory.determineAcceptGroupSize(InternodeEncryption.rack));
-        Assert.assertEquals(2, NettyFactory.determineAcceptGroupSize(InternodeEncryption.dc));
-
-        InetAddress originalBroadcastAddr = FBUtilities.getBroadcastAddress();
-        try
-        {
-            FBUtilities.setBroadcastInetAddress(InetAddresses.increment(FBUtilities.getLocalAddress()));
-            DatabaseDescriptor.setListenOnBroadcastAddress(true);
-
-            Assert.assertEquals(2, NettyFactory.determineAcceptGroupSize(InternodeEncryption.none));
-            Assert.assertEquals(2, NettyFactory.determineAcceptGroupSize(InternodeEncryption.all));
-            Assert.assertEquals(4, NettyFactory.determineAcceptGroupSize(InternodeEncryption.rack));
-            Assert.assertEquals(4, NettyFactory.determineAcceptGroupSize(InternodeEncryption.dc));
-        }
-        finally
-        {
-            FBUtilities.setBroadcastInetAddress(originalBroadcastAddr);
-            DatabaseDescriptor.setListenOnBroadcastAddress(false);
-        }
+        EventLoopGroup eventLoopGroup = NettyFactory.getEventLoopGroup();
+        Assert.assertTrue(eventLoopGroup instanceof TPCEventLoopGroup);
     }
 
     @Test
-    public void getEventLoopGroup_EpollWithIoRatioBoost()
+    public void createOutboundBootstrap()
     {
-        getEventLoopGroup_Epoll(true);
-    }
-
-    private EpollEventLoopGroup getEventLoopGroup_Epoll(boolean ioBoost)
-    {
-        EventLoopGroup eventLoopGroup;
-        try
-        {
-            eventLoopGroup = NettyFactory.getEventLoopGroup(true, 1, "testEventLoopGroup", ioBoost);
-        }
-        catch (Exception e)
-        {
-            if (NativeLibrary.osType == NativeLibrary.OSType.LINUX)
-                throw e;
-
-            // ignore as epoll is only available on linux platforms, so don't fail the test on other OSes
-            return null;
-        }
-
-        Assert.assertTrue(eventLoopGroup instanceof EpollEventLoopGroup);
-        return (EpollEventLoopGroup) eventLoopGroup;
-    }
-
-    @Test
-    public void getEventLoopGroup_EpollWithoutIoRatioBoost()
-    {
-        getEventLoopGroup_Epoll(false);
-    }
-
-    @Test
-    public void getEventLoopGroup_NioWithoutIoRatioBoost()
-    {
-        getEventLoopGroup_Nio(true);
-    }
-
-    private NioEventLoopGroup getEventLoopGroup_Nio(boolean ioBoost)
-    {
-        EventLoopGroup eventLoopGroup = NettyFactory.getEventLoopGroup(false, 1, "testEventLoopGroup", ioBoost);
-        Assert.assertTrue(eventLoopGroup instanceof NioEventLoopGroup);
-        return (NioEventLoopGroup) eventLoopGroup;
-    }
-
-    @Test
-    public void getEventLoopGroup_NioWithIoRatioBoost()
-    {
-        getEventLoopGroup_Nio(true);
-    }
-
-    @Test
-    public void createOutboundBootstrap_Epoll()
-    {
-        Bootstrap bootstrap = createOutboundBootstrap(true);
-        Assert.assertEquals(EpollEventLoopGroup.class, bootstrap.config().group().getClass());
-    }
-
-    private Bootstrap createOutboundBootstrap(boolean useEpoll)
-    {
-        factory = new NettyFactory(useEpoll);
+        factory = new NettyFactory();
         OutboundConnectionIdentifier id = OutboundConnectionIdentifier.gossip(LOCAL_ADDR, REMOTE_ADDR);
         OutboundConnectionParams params = OutboundConnectionParams.builder()
                                                                   .connectionId(id)
                                                                   .coalescingStrategy(Optional.empty())
                                                                   .protocolVersion(MessagingService.current_version.protocolVersion())
                                                                   .build();
-        return factory.createOutboundBootstrap(params);
-    }
-
-    @Test
-    public void createOutboundBootstrap_Nio()
-    {
-        Bootstrap bootstrap = createOutboundBootstrap(false);
-        Assert.assertEquals(NioEventLoopGroup.class, bootstrap.config().group().getClass());
+        Bootstrap bootstrap = factory.createOutboundBootstrap(params);
+        Assert.assertTrue(bootstrap.config().group() instanceof TPCEventLoopGroup);
     }
 
     @Test

@@ -2,11 +2,9 @@ package org.apache.cassandra.net.async;
 
 import java.net.InetSocketAddress;
 import java.util.zip.Checksum;
-
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,12 +17,9 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.ServerChannel;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.epoll.EpollSocketChannel;
 import io.netty.channel.group.ChannelGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
@@ -36,7 +31,6 @@ import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.util.concurrent.DefaultEventExecutor;
-import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import io.netty.util.internal.logging.Slf4JLoggerFactory;
@@ -44,14 +38,11 @@ import net.jpountz.lz4.LZ4Factory;
 import net.jpountz.xxhash.XXHashFactory;
 import org.apache.cassandra.auth.IInternodeAuthenticator;
 import org.apache.cassandra.concurrent.TPC;
-import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
-import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions.InternodeEncryption;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.ProtocolVersion;
 import org.apache.cassandra.security.SSLFactory;
-import org.apache.cassandra.service.NativeTransportService;
 import org.apache.cassandra.utils.ChecksumType;
 import org.apache.cassandra.utils.CoalescingStrategies;
 import org.apache.cassandra.utils.FBUtilities;
@@ -86,13 +77,6 @@ public final class NettyFactory
             InternalLoggerFactory.setDefaultFactory(Slf4JLoggerFactory.INSTANCE);
     }
 
-    private static final boolean DEFAULT_USE_EPOLL = TPC.USE_EPOLL;
-    static
-    {
-        if (!DEFAULT_USE_EPOLL)
-            logger.warn("epoll not availble {}", Epoll.unavailabilityCause());
-    }
-
     /**
      * The size of the receive queue for the outbound channels. As outbound channels do not receive data
      * (outside of the internode messaging protocol's handshake), this value can be relatively small.
@@ -108,75 +92,11 @@ public final class NettyFactory
     /**
      * A factory instance that all normal, runtime code should use. Separate instances should only be used for testing.
      */
-    public static final NettyFactory instance = new NettyFactory(DEFAULT_USE_EPOLL);
+    public static final NettyFactory instance = new NettyFactory();
 
-    private final boolean useEpoll;
-    private final EventLoopGroup acceptGroup;
-
-    private final EventLoopGroup inboundGroup;
-    private final EventLoopGroup outboundGroup;
-
-    /**
-     * Constructor that allows modifying the {@link NettyFactory#useEpoll} for testing purposes. Otherwise, use the
-     * default {@link #instance}.
-     */
-    @VisibleForTesting
-    NettyFactory(boolean useEpoll)
+    static EventLoopGroup getEventLoopGroup()
     {
-        this.useEpoll = useEpoll;
-        acceptGroup = getEventLoopGroup(useEpoll, determineAcceptGroupSize(DatabaseDescriptor.getServerEncryptionOptions().internode_encryption),
-                                        "MessagingService-NettyAcceptor-Threads", false);
-        // TODO Wire at least the inbound events, but also probably the others to use the TPC event loops.
-        inboundGroup = getEventLoopGroup(useEpoll, FBUtilities.getAvailableProcessors(), "MessagingService-NettyInbound-Threads", false);
-        outboundGroup = getEventLoopGroup(useEpoll, FBUtilities.getAvailableProcessors(), "MessagingService-NettyOutbound-Threads", true);
-    }
-
-    /**
-     * Determine the number of accept threads we need, which is based upon the number of listening sockets we will have.
-     * We'll have either 1 or 2 listen sockets, depending on if we use SSL or not in combination with non-SSL. If we have both,
-     * we'll have two sockets, and thus need two threads; else one socket and one thread.
-     *
-     * If the operator has configured multiple IP addresses (both {@link org.apache.cassandra.config.Config#broadcast_address}
-     * and {@link org.apache.cassandra.config.Config#listen_address} are configured), then we listen on another set of sockets
-     * - basically doubling the count. See CASSANDRA-9748 for more details.
-     */
-    static int determineAcceptGroupSize(InternodeEncryption internode_encryption)
-    {
-        int listenSocketCount = internode_encryption == InternodeEncryption.dc || internode_encryption == InternodeEncryption.rack ? 2 : 1;
-
-        if (MessagingService.shouldListenOnBroadcastAddress())
-            listenSocketCount *= 2;
-
-        return listenSocketCount;
-    }
-
-    /**
-     * Create an {@link EventLoopGroup}, for epoll or nio. The {@code boostIoRatio} flag passes a hint to the netty
-     * event loop threads to optimize comsuming all the tasks from the netty channel before checking for IO activity.
-     * By default, netty will process some maximum number of tasks off it's queue before it will check for activity on
-     * any of the open FDs, which basically amounts to checking for any incoming data. If you have a class of event loops
-     * that that do almost *no* inbound activity (like cassandra's outbound channels), then it behooves us to have the
-     * outbound netty channel consume as many tasks as it can before making the system calls to check up on the FDs,
-     * as we're not expecting any incoming data on those sockets, anyways. Thus, we pass the magic value {@code 100}
-     * to achieve the maximum consuption from the netty queue. (for implementation details, as of netty 4.1.8,
-     * see {@link io.netty.channel.epoll.EpollEventLoop#run()}.
-     */
-    static EventLoopGroup getEventLoopGroup(boolean useEpoll, int threadCount, String threadNamePrefix, boolean boostIoRatio)
-    {
-        if (useEpoll)
-        {
-            logger.debug("using netty epoll event loop for pool prefix {}", threadNamePrefix);
-            EpollEventLoopGroup eventLoopGroup = new EpollEventLoopGroup(threadCount, new DefaultThreadFactory(threadNamePrefix));
-            if (boostIoRatio)
-                eventLoopGroup.setIoRatio(100);
-            return eventLoopGroup;
-        }
-
-        logger.debug("using netty nio event loop for pool prefix {}", threadNamePrefix);
-        NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup(threadCount, new DefaultThreadFactory(threadNamePrefix));
-        if (boostIoRatio)
-            eventLoopGroup.setIoRatio(100);
-        return eventLoopGroup;
+        return TPC.eventLoopGroup();
     }
 
     /**
@@ -188,8 +108,8 @@ public final class NettyFactory
         String nic = FBUtilities.getNetworkInterface(localAddr.getAddress());
         logger.info("Starting Messaging Service on {} {}, encryption: {}",
                     localAddr, nic == null ? "" : String.format(" (%s)", nic), encryptionLogStatement(initializer.encryptionOptions));
-        Class<? extends ServerChannel> transport = useEpoll ? EpollServerSocketChannel.class : NioServerSocketChannel.class;
-        ServerBootstrap bootstrap = new ServerBootstrap().group(acceptGroup, inboundGroup)
+        Class<? extends ServerChannel> transport = TPC.USE_EPOLL ? EpollServerSocketChannel.class : NioServerSocketChannel.class;
+        ServerBootstrap bootstrap = new ServerBootstrap().group(getEventLoopGroup())
                                                          .channel(transport)
                                                          .option(ChannelOption.SO_BACKLOG, 500)
                                                          .childOption(ChannelOption.SO_KEEPALIVE, true)
@@ -287,8 +207,8 @@ public final class NettyFactory
         logger.debug("creating outbound bootstrap to peer {}, compression: {}, encryption: {}, coalesce: {}", params.connectionId.connectionAddress(),
                      params.compress, encryptionLogStatement(params.encryptionOptions),
                      params.coalescingStrategy.isPresent() ? params.coalescingStrategy.get() : CoalescingStrategies.Strategy.DISABLED);
-        Class<? extends Channel>  transport = useEpoll ? EpollSocketChannel.class : NioSocketChannel.class;
-        Bootstrap bootstrap = new Bootstrap().group(outboundGroup)
+        Class<? extends Channel>  transport = TPC.USE_EPOLL ? EpollSocketChannel.class : NioSocketChannel.class;
+        Bootstrap bootstrap = new Bootstrap().group(getEventLoopGroup())
                               .channel(transport)
                               .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 2000)
                               .option(ChannelOption.SO_KEEPALIVE, true)
@@ -349,9 +269,7 @@ public final class NettyFactory
 
     public void close()
     {
-        acceptGroup.shutdownGracefully();
-        outboundGroup.shutdownGracefully();
-        inboundGroup.shutdownGracefully();
+        // TODO
     }
 
     static Lz4FrameEncoder createLz4Encoder(ProtocolVersion protocolVersion)
