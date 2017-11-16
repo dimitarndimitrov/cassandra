@@ -237,10 +237,7 @@ public final class MessagingService implements MessagingServiceMBean
 
     private <P, Q> void deliverLocally(Request<P, Q> request, MessageCallback<Q> callback)
     {
-        Consumer<Response<Q>> handleResponse = response ->
-                                               request.responseExecutor()
-                                                      .execute(() -> deliverLocalResponse(request, response, callback),
-                                                               ExecutorLocals.create());
+        Consumer<Response<Q>> handleResponse = response -> deliverLocalResponse(request, response, callback);
 
         Consumer<Response<Q>> onResponse = messageInterceptors.isEmpty()
                                            ? handleResponse
@@ -274,6 +271,10 @@ public final class MessagingService implements MessagingServiceMBean
     {
         long startTime = request.operationStartMillis();
         long timeout = request.timeoutMillis();
+        // DB-1205 In order to experiment how would response handling behave without explicit scheduling on a response
+        // executor for both the local and the remote use-cases, for the remote use-case we'll be passing a response
+        // executor to the request callback, but we won't be using it for the actual handling of the response, once
+        // it's ready for processing. Also see receiveInternal() and receiveResponseInternal().
         TracingAwareExecutor executor = request.responseExecutor();
 
         for (Request.Forward forward : request.forwards())
@@ -751,7 +752,7 @@ public final class MessagingService implements MessagingServiceMBean
 
     private <P, Q> void receiveRequestInternal(Request<P, Q> request, ExecutorLocals locals)
     {
-        request.requestExecutor().execute(  MessageDeliveryTask.forRequest(request), locals);
+        request.requestExecutor().execute(MessageDeliveryTask.forRequest(request), locals);
     }
 
     private <Q> void receiveResponseInternal(Response<Q> response, ExecutorLocals locals)
@@ -760,7 +761,10 @@ public final class MessagingService implements MessagingServiceMBean
 
         // Ignore expired callback info (we already logged in getRegisteredCallback)
         if (info != null)
-            info.responseExecutor.execute(MessageDeliveryTask.forResponse(response), locals);
+            // DB-1205 We are running the response handling directly on a "MessagingService-Incoming-" thread, usually
+            // meant to handle the inbound TCP connection... For this case, we may also want to consider executing
+            // the response in the TPC thread that would have handled the request (i.e. in the request executor).
+            MessageDeliveryTask.forResponse(response);
     }
 
     // Only required by legacy serialization. Can inline in following method when we get rid of that.
