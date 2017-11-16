@@ -19,6 +19,9 @@ package org.apache.cassandra.cql3;
 
 import org.junit.Test;
 
+import org.apache.cassandra.concurrent.TPC;
+import org.apache.cassandra.concurrent.TPCTaskType;
+
 public class SimpleQueryTest extends CQLTester
 {
     @Test
@@ -43,6 +46,8 @@ public class SimpleQueryTest extends CQLTester
             row("key",  5, "v15")
         );
 
+        logger.error(TPC.metrics(TPC.getNumCores()).scheduledTaskCount(TPCTaskType.WRITE) + "");
+        
         assertRows(execute("SELECT * FROM %s WHERE k = ? AND t > ?", "key", 3),
             row("key",  4, "v14"),
             row("key",  5, "v15")
