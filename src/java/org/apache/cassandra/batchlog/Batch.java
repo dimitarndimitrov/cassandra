@@ -101,8 +101,8 @@ public final class Batch implements SchedulableMessage
 
     public TracingAwareExecutor getResponseExecutor()
     {
-        // return getScheduler().forTaskType(TPCTaskType.BATCH_WRITE_RESPONSE);
-        return TPC.ioScheduler().forTaskType(TPCTaskType.BATCH_WRITE_RESPONSE);
+        return getScheduler().forTaskType(TPCTaskType.BATCH_WRITE_RESPONSE);
+        // return TPC.ioScheduler().forTaskType(TPCTaskType.BATCH_WRITE_RESPONSE);
     }
 
     static final class BatchSerializer extends VersionDependent<WriteVersion> implements Serializer<Batch>

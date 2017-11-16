@@ -118,8 +118,8 @@ public class SinglePartitionReadCommand extends ReadCommand
 
         this.scheduler = TPC.bestTPCScheduler();
         this.requestExecutor = scheduler.forTaskType(TPCTaskType.READ);
-        // this.responseExecutor = scheduler.forTaskType(TPCTaskType.READ_RESPONSE);
-        this.responseExecutor = TPC.ioScheduler().forTaskType(TPCTaskType.READ_RESPONSE);
+        this.responseExecutor = scheduler.forTaskType(TPCTaskType.READ_RESPONSE);
+        // this.responseExecutor = TPC.ioScheduler().forTaskType(TPCTaskType.READ_RESPONSE);
     }
 
     public Request.Dispatcher<SinglePartitionReadCommand, ReadResponse> dispatcherTo(Collection<InetAddress> endpoints)

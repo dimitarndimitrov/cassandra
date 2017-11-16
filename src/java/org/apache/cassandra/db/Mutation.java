@@ -116,8 +116,8 @@ public class Mutation implements IMutation, SchedulableMessage
 
         this.scheduler = createScheduler(keyspaceName, key);
         this.requestExecutor = scheduler == null ? null : scheduler.forTaskType(TPCTaskType.WRITE);
-        // this.responseExecutor = scheduler == null ? null : scheduler.forTaskType(TPCTaskType.WRITE_RESPONSE);
-        this.responseExecutor = TPC.ioScheduler().forTaskType(TPCTaskType.WRITE_RESPONSE);
+        this.responseExecutor = scheduler == null ? null : scheduler.forTaskType(TPCTaskType.WRITE_RESPONSE);
+        // this.responseExecutor = TPC.ioScheduler().forTaskType(TPCTaskType.WRITE_RESPONSE);
     }
 
     private static TPCScheduler createScheduler(String keyspaceName, DecoratedKey key)

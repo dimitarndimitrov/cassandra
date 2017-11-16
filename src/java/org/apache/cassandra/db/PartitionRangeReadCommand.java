@@ -101,8 +101,8 @@ public class PartitionRangeReadCommand extends ReadCommand
 
         this.scheduler = scheduler == null ? TPC.bestTPCScheduler() : scheduler;
         this.requestExecutor = this.scheduler.forTaskType(TPCTaskType.READ_RANGE);
-        // this.responseExecutor = this.scheduler.forTaskType(TPCTaskType.READ_RANGE_RESPONSE);
-        this.responseExecutor = TPC.ioScheduler().forTaskType(TPCTaskType.READ_RANGE_RESPONSE);
+        this.responseExecutor = this.scheduler.forTaskType(TPCTaskType.READ_RANGE_RESPONSE);
+        // this.responseExecutor = TPC.ioScheduler().forTaskType(TPCTaskType.READ_RANGE_RESPONSE);
     }
 
     /**
