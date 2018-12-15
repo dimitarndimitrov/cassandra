@@ -35,6 +35,7 @@ import org.apache.cassandra.db.PartitionPosition;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.db.compaction.CompactionTask;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
+import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.SSTableRewriter;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.utils.FBUtilities;
@@ -202,9 +203,12 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
 
     /**
      * Return a directory where we can expect expectedWriteSize to fit.
+     * Guaranteed not to return {@code null} - if a suitable directory cannot be found, the method will throw.
      *
      * @param sstables the sstables to compact
-     * @return
+     *
+     * @throws FSWriteError if all directories are blacklisted.
+     * @throws RuntimeException if no directory has enough usable space to accommodate {@code writeSize} bytes.
      */
     public Directories.DataDirectory getWriteDirectory(Iterable<SSTableReader> sstables, long estimatedWriteSize)
     {
@@ -232,9 +236,6 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
             return d;
         }
         d = getDirectories().getWriteableLocation(estimatedWriteSize);
-        if (d == null)
-            throw new RuntimeException(String.format("Not enough disk space to store %s",
-                                                     FBUtilities.prettyPrintMemory(estimatedWriteSize)));
         return d;
     }
 
