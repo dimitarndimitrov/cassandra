@@ -142,11 +142,9 @@ public class StreamReader
         }
     }
 
-    protected SSTableWriter createWriter(ColumnFamilyStore cfs, long totalSize, long repairedAt, SSTableFormat.Type format) throws IOException
+    protected SSTableWriter createWriter(ColumnFamilyStore cfs, long totalSize, long repairedAt, SSTableFormat.Type format)
     {
         Directories.DataDirectory localDir = cfs.directories.getWriteableLocation(totalSize);
-        if (localDir == null)
-            throw new IOException("Insufficient disk space to store " + totalSize + " bytes");
         desc = Descriptor.fromFilename(cfs.getTempSSTablePath(cfs.directories.getLocationForDisk(localDir), format));
 
         return SSTableWriter.create(desc, estimatedKeys, repairedAt, sstableLevel);
