@@ -307,7 +307,7 @@ public class Directories
      * which may return any non-blacklisted directory - even a data directory that has no usable space.
      * Do not use this method in production code.
      *
-     * @throws IOError if all directories are blacklisted.
+     * @throws FSWriteError if all directories are blacklisted.
      */
     public File getDirectoryForNewSSTables()
     {
@@ -317,7 +317,8 @@ public class Directories
     /**
      * Returns a non-blacklisted data directory that _currently_ has {@code writeSize} bytes as usable space.
      *
-     * @throws IOError if all directories are blacklisted.
+     * @throws FSWriteError if all directories are blacklisted.
+     * @throws FSDiskFullWriteError if no directory has enough usable space to accommodate {@code writeSize} bytes.
      */
     public File getWriteableLocationAsFile(long writeSize)
     {
@@ -329,7 +330,8 @@ public class Directories
      * that _currently_ has {@code writeSize} bytes as usable space.
      * This method does not create the temporary directory.
      *
-     * @throws IOError if all directories are blacklisted.
+     * @throws FSWriteError if all directories are blacklisted.
+     * @throws FSDiskFullWriteError if no directory has enough usable space to accommodate {@code writeSize} bytes.
      */
     public File getTemporaryWriteableDirectoryAsFile(long writeSize)
     {
@@ -354,8 +356,10 @@ public class Directories
 
     /**
      * Returns a non-blacklisted data directory that _currently_ has {@code writeSize} bytes as usable space.
+     * Guaranteed not to return {@code null} - if a suitable directory cannot be found, the method will throw.
      *
-     * @throws IOError if all directories are blacklisted.
+     * @throws FSWriteError if all directories are blacklisted.
+     * @throws FSDiskFullWriteError if no directory has enough usable space to accommodate {@code writeSize} bytes.
      */
     public DataDirectory getWriteableLocation(long writeSize)
     {
