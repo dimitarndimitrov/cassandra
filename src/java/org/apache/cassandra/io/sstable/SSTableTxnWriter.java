@@ -18,7 +18,6 @@
 
 package org.apache.cassandra.io.sstable;
 
-import java.io.IOException;
 import java.util.Collection;
 
 import org.apache.cassandra.config.CFMetaData;
@@ -118,16 +117,7 @@ public class SSTableTxnWriter extends Transactional.AbstractTransactional implem
         ColumnFamilyStore cfs = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfName);
         LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.WRITE);
         SSTableMultiWriter writer;
-        try
-        {
-            writer = new RangeAwareSSTableWriter(cfs, keyCount, repairedAt, type, sstableLevel, 0, txn, header);
-        }
-        catch (IOException e)
-        {
-            //We don't know the total size so this should never happen
-            //as we send in 0
-            throw new RuntimeException(e);
-        }
+        writer = new RangeAwareSSTableWriter(cfs, keyCount, repairedAt, type, sstableLevel, 0, txn, header);
 
         return new SSTableTxnWriter(txn, writer);
     }
